@@ -22,7 +22,7 @@ test('disabled, missing-key and normal-web mode deny check without claim or netw
  for(const settings of [{},{...env,TAVILY_API_KEY:''},{...env,ENABLE_WEB_SEARCH_TEST:'false'},{...env,ENABLE_WEB_SEARCH:'true'}]){const f=fixture();await assert.rejects(runSearchCheck(f.storage,settings,f.http));assert.equal(f.calls.length,0);assert.equal(await searchCheckStatus(f.storage),undefined);}
 });
 test('credit-limit/basic search failure prevents extraction and retry',async()=>{
- const storage=new Storage();let calls=0;const http=(async()=>{calls++;return new Response('credit limit secret-like body',{status:429});}) as typeof fetch;const first=await runSearchCheck(storage,env,http);assert.equal(first.status,'failed');assert.deepEqual(first.attempts,['web_search']);assert.ok(!JSON.stringify(first).includes('secret-like'));await runSearchCheck(storage,env,http);assert.equal(calls,1);
+ const storage=new Storage();let calls=0;const http=(async()=>{calls++;return new Response('credit limit secret-like body',{status:429});}) as typeof fetch;const first=await runSearchCheck(storage,env,http);assert.equal(first.status,'failed');assert.deepEqual(first.attempts,['web_search']);assert.ok(!JSON.stringify(first).includes('secret-like'));assert.equal((await searchCheckStatus(storage))?.reason,'Provider rate limit or access restriction');await runSearchCheck(storage,env,http);assert.equal(calls,1);
 });
 test('an interrupted claimed check never repeats; failed extraction has no fallback',async()=>{
  const f=fixture();await f.storage.put('tools:approved-search-check:v1',{status:'running',attempts:['web_search']});assert.equal((await runSearchCheck(f.storage,env,f.http)).status,'running');assert.equal(f.calls.length,0);

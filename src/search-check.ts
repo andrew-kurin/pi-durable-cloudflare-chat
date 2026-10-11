@@ -1,9 +1,17 @@
 import {BACKGROUND_CONTEXT as context} from '@earendil-works/chord/context';
 import {readTools,type ToolStorage} from './read-tools';
-export type SearchCheck = {status:'running'|'passed'|'failed'; attempts:string[]; search?:{count:number;url:string;credits:number|null}; extract?:{url:string;characters:number;truncated:boolean;credits:number|null};error?:string};
+export type SearchCheck = {status:'running'|'passed'|'failed'; attempts:string[]; search?:{count:number;url:string;credits:number|null}; extract?:{url:string;characters:number;truncated:boolean;credits:number|null};error?:string;reason?:string};
 const CHECK_KEY='tools:approved-search-check:v1';
 export type SearchCheckEnv={ENABLE_WEB_SEARCH_TEST?:string;ENABLE_WEB_SEARCH?:string;TAVILY_API_KEY?:string};
-export function searchCheckStatus(storage:ToolStorage){return storage.get<SearchCheck>(CHECK_KEY);}
+export async function searchCheckStatus(storage:ToolStorage){
+ const state=await storage.get<SearchCheck>(CHECK_KEY);
+ if(state?.status==='failed'){
+  const memo=await storage.get<{content:{type:string;text:string}[]}>(CHECK_KEY+':memo:'+state.attempts.at(-1)+':read-result');
+  // Only expose the read tool's already-sanitized error category, never response bodies.
+  try{const error=JSON.parse(memo?.content?.[0]?.text??'{}').data?.error;if(typeof error==='string'&&/^(Read provider unavailable|Provider rate limit or access restriction|Read unavailable or interrupted|Read-tool budget reached|Provider response too large|Unexpected provider response|Web search is not configured)/.test(error))state.reason=error.slice(0,200);}catch{}
+ }
+ return state;
+}
 // Owner-only, fixed public inputs, no model invocation, no automatic retries.
 // The durable claim precedes either network call. An interrupted test stays claimed.
 export async function runSearchCheck(storage:ToolStorage,env:SearchCheckEnv,http:typeof fetch=fetch):Promise<SearchCheck>{
