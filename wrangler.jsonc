@@ -1,0 +1,14 @@
+{
+ "$schema":"node_modules/wrangler/config-schema.json",
+ "name":"pi-private-chat",
+ "main":"src/index.ts",
+ "compatibility_date":"2026-10-11",
+ "compatibility_flags":["nodejs_compat"],
+ "workers_dev":false,
+ "preview_urls":false,
+ "assets":{"directory":"./public","binding":"ASSETS","run_worker_first":true},
+ "durable_objects":{"bindings":[{"name":"Assistant","class_name":"Assistant"}]},
+ "migrations":[{"tag":"v1","new_sqlite_classes":["Assistant"]}],
+ "vars":{"ACCESS_TEAM_DOMAIN":"","ACCESS_AUD":"","OWNER_EMAIL":"","APP_ORIGIN":"","ENABLE_MODEL":"false","ENABLE_SUBSCRIPTION_LOGIN":"false"},
+ "observability":{"enabled":false}
+}

@@ -1,0 +1,21 @@
+const $=id=>document.getElementById(id);let session='1',stream,revision=0,pending=null;
+async function api(path,body){const r=await fetch(path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});let data;try{data=await r.json()}catch{throw Error('Sign-in expired. Reload to sign in again.')}if(!r.ok)throw Error(data.error||'Request failed');return data}
+function message(role,text,partial=false){const node=document.createElement('article');node.className='message '+role+(partial?' partial':'');const label=document.createElement('span');label.className='role';label.textContent=role==='user'?'You':'Sol';node.append(label,document.createTextNode(text));return node}
+function open(){stream?.close();const own=++revision;stream=new EventSource('/api/events?session='+session);stream.onopen=()=>{$('connection').textContent='Connected'};stream.onmessage=e=>{if(own!==revision)return;const view=JSON.parse(e.data);const box=$('messages');const near=box.scrollHeight-box.scrollTop-box.clientHeight<100;box.replaceChildren(...view.messages.filter(m=>m.text).map(m=>message(m.role,m.text)));if(view.partial)box.append(message('assistant',view.partial,true));$('activity').textContent=view.activity||(view.busy?'Sol is thinking…':'');$('stop').hidden=!view.busy;$('send').disabled=view.busy;if(near)box.scrollTop=box.scrollHeight};stream.onerror=()=>{$('connection').textContent='Reconnecting…'};}
+async function sessions(){const list=await api('/api/sessions');$('sessions').replaceChildren(...list.map(s=>{const o=document.createElement('option');o.value=s.id;o.textContent='Chat '+s.id;return o}));$('sessions').value=session}
+$('sessions').onchange=()=>{session=$('sessions').value;open()};$('new').onclick=async()=>{try{$('new').disabled=true;const s=await api('/api/sessions',{});session=s.id;await sessions();open()}catch(e){$('activity').textContent=e.message}finally{$('new').disabled=false}};
+$('form').onsubmit=async e=>{e.preventDefault();const text=$('prompt').value.trim();if(!text)return;$('send').disabled=true;pending=pending?.text===text&&pending.session===session?pending:{text,operationId:crypto.randomUUID(),session};try{await api('/api/submit?session='+session,pending);$('prompt').value='';pending=null}catch(err){$('activity').textContent=err.message;$('send').disabled=false}};
+$('stop').onclick=async()=>{try{await api('/api/abort?session='+session,{})}catch(e){$('activity').textContent=e.message}};
+async function status(){const s=await api('/api/status');$('setup').hidden=s.connected&&s.modelEnabled;$('setup-text').textContent=s.connected?'Subscription connected. Model access awaits activation.':'Your private chat is ready. Subscription access is not connected yet.';$('connect').hidden=!s.canLogin;if(s.login?.status==='device_code'){$('verify').href=s.login.verificationUri;$('verify').hidden=false;$('code').textContent=s.login.userCode}}
+$('connect').onclick=async()=>{
+ $('connect').disabled=true;
+ try{
+  const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  if(!r.ok)throw Error('Subscription sign-in is unavailable.');
+  const reader=r.body.getReader(),decoder=new TextDecoder();let pending='';
+  while(true){const {value,done}=await reader.read();if(done)break;pending+=decoder.decode(value,{stream:true});const lines=pending.split('\n');pending=lines.pop();for(const line of lines){if(!line)continue;const s=JSON.parse(line);if(s.status==='device_code'){$('verify').href=s.verificationUri;$('verify').hidden=false;$('code').textContent=s.userCode;$('setup-text').textContent='Keep this page open. Complete secure sign-in in another tab.';}else if(s.status==='failed'||s.status==='cancelled'){$('setup-text').textContent='Sign-in ended. You can try again.';$('verify').hidden=true;$('code').textContent='';}}}
+  await status();
+ }catch(e){$('setup-text').textContent=e.message}finally{$('connect').disabled=false}
+};
+Promise.all([sessions(),status()]).then(open).catch(e=>{$('connection').textContent='Sign-in needed';$('activity').textContent=e.message});
+window.addEventListener('pagehide',()=>stream?.close());window.addEventListener('pageshow',e=>{if(e.persisted)open()});

@@ -1,0 +1,36 @@
+{
+  "name": "pi-cloudflare-chat",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "dev": "wrangler dev --local"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
+    "agents": "0.28.0",
+    "jose": "6.2.12"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261011.1",
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261006.1-alpha",
+    "playwright-core": "1.64.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "wrangler": "4.149.0"
+  },
+  "private": true
+}

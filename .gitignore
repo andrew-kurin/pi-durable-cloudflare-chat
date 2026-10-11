@@ -1,0 +1,51 @@
+# Dependencies and generated output
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-store/
+
+# Cloudflare and local runtime state
+.wrangler/
+.miniflare/
+.runtime/
+.runtime-state/
+state/
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-*
+
+# Secrets and local configuration
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+secrets/
+credentials/
+*credentials*.json
+*.pem
+*.key
+*.p12
+*.pfx
+.aws/
+.config/
+
+# Safe documentation samples
+!.env.example
+!.env.sample
+!.dev.vars.example
+!.dev.vars.sample
+!*.credentials.example.json
+
+# OS/editor files
+.DS_Store
+.vscode/
+.idea/
