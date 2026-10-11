@@ -41,22 +41,27 @@ export function readTools(storage:ToolStorage,env:{TAVILY_API_KEY?:string;ENABLE
   const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
   const timer=setTimeout(abort,12000);
   try{
-   const response=await http(url,{...init,redirect:'error',signal:controller.signal});
-   if(!response.ok){await response.body?.cancel();throw new Error(response.status===429||response.status===403?'Provider rate limit or access restriction':'Read provider unavailable');}
+   let response:Response;
+   try{response=await http(url,{...init,redirect:'manual',signal:controller.signal});}catch{throw new Error(controller.signal.aborted?'Read provider request aborted or timed out':'Read provider transport failed');}
+   if(response.status>=300&&response.status<400){await response.body?.cancel();throw new Error('Read provider redirect rejected');}
+   if(!response.ok){await response.body?.cancel();throw new Error(response.status===401?'Read provider authentication rejected':response.status===429||response.status===403?'Provider rate limit or access restriction':'Read provider unavailable');}
    if(!response.headers.get('content-type')?.includes('json')){await response.body?.cancel();throw new Error('Unexpected provider response');}
    const reader=response.body?.getReader();if(!reader)throw new Error('Empty provider response');
    const chunks:Uint8Array[]=[];let size=0;
    try{while(true){const part=await reader.read();if(part.done)break;size+=part.value.length;if(size>MAX_RESPONSE)throw new Error('Provider response too large');chunks.push(part.value);}}catch(error){await reader.cancel();throw error;}finally{reader.releaseLock();}
    const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
-   return JSON.parse(new TextDecoder().decode(bytes));
+   try{return JSON.parse(new TextDecoder().decode(bytes));}catch{throw new Error('Unexpected provider JSON response');}
   }finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
  }
  async function github(path:string,signal?:AbortSignal){await reserve('github',path.startsWith('/search/'));return json('https://api.github.com'+path,{headers:{Accept:'application/vnd.github+json','User-Agent':'pi-private-chat-read-tools','X-GitHub-Api-Version':'2022-11-28'}},signal);}
  async function publicRepo(name:string,signal?:AbortSignal){const info=await github('/repos/'+repo(name),signal);if(info.private!==false)throw new Error('Only public repositories are supported');return info;}
  async function tavily(endpoint:'search'|'extract',body:unknown,signal?:AbortSignal){
   if(env.ENABLE_WEB_SEARCH!=='true'||!env.TAVILY_API_KEY)throw new Error('Web search is not configured: owner must set TAVILY_API_KEY and explicitly enable ENABLE_WEB_SEARCH');
+  // Clipboard/newline edges stay inside the runtime; no credential values are returned.
+  const key=env.TAVILY_API_KEY.trim();
+  if(!/^[\x21-\x7e]{1,512}$/.test(key)||/^['"]|['"]$|^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(key))throw new Error('Search key configuration invalid; owner must provide only the API key value');
   await reserve('tavily');
-  return json('https://api.tavily.com/'+endpoint,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+env.TAVILY_API_KEY},body:JSON.stringify(body)},signal);
+  return json('https://api.tavily.com/'+endpoint,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify(body)},signal);
  }
  async function cached(name:string,args:unknown,work:()=>Promise<Result>):Promise<Result>{
   if(!cacheEnabled)return work();
@@ -68,7 +73,7 @@ export function readTools(storage:ToolStorage,env:{TAVILY_API_KEY?:string;ENABLE
   const prior=await api.memo('read-result',context);if(prior)return prior;
   let value:Result;try{value=await cached(name,args,()=>work(args,context.abortSignal));}catch(e){
    // Never return raw HTTP bodies, URLs with credentials, or exception values.
-   const safe=['Web search is not configured','Read-tool budget reached','Only public','Use a short','Use owner/','Credential-bearing','Unsafe URL','URL too long','Provider response too large','Provider rate limit','Read provider unavailable','Unexpected provider','Empty provider','Invalid file','Invalid item'];
+   const safe=['Web search is not configured','Search key configuration invalid','Read-tool budget reached','Only public','Use a short','Use owner/','Credential-bearing','Unsafe URL','URL too long','Provider response too large','Provider rate limit','Read provider unavailable','Read provider authentication rejected','Read provider transport failed','Read provider redirect rejected','Read provider request aborted or timed out','Unexpected provider','Empty provider','Invalid file','Invalid item'];
    const message=e instanceof Error&&safe.some(p=>e.message.startsWith(p))?e.message:'Read unavailable or interrupted';value=result({error:message});
   }
   return api.memo('read-result',value,context);

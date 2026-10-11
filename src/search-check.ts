@@ -8,7 +8,7 @@ export async function searchCheckStatus(storage:ToolStorage){
  if(state?.status==='failed'){
   const memo=await storage.get<{content:{type:string;text:string}[]}>(CHECK_KEY+':memo:'+state.attempts.at(-1)+':read-result');
   // Only expose the read tool's already-sanitized error category, never response bodies.
-  try{const error=JSON.parse(memo?.content?.[0]?.text??'{}').data?.error;if(typeof error==='string'&&/^(Read provider unavailable|Provider rate limit or access restriction|Read unavailable or interrupted|Read-tool budget reached|Provider response too large|Unexpected provider response|Web search is not configured)/.test(error))state.reason=error.slice(0,200);}catch{}
+  try{const error=JSON.parse(memo?.content?.[0]?.text??'{}').data?.error;if(typeof error==='string'&&/^(Read provider unavailable|Read provider authentication rejected|Read provider transport failed|Read provider redirect rejected|Read provider request aborted or timed out|Search key configuration invalid|Provider rate limit or access restriction|Read unavailable or interrupted|Read-tool budget reached|Provider response too large|Unexpected provider|Web search is not configured)/.test(error))state.reason=error.slice(0,200);}catch{}
  }
  return state;
 }

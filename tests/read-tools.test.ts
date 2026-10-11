@@ -29,7 +29,7 @@ test('missing key or enable flag causes zero HTTP calls',async()=>{
 });
 test('Tavily requests use fixed hosts, explicit basic depth and sanitized source results',async()=>{
  const h=harness(enabled,()=>Response.json({results:[{title:'Docs',url:'https://developers.cloudflare.com/',content:'Evidence'},{url:'https://127.0.0.1',content:'hidden'}]}));
- const out=output(await h.run('web_search',{query:'Workers docs'}));assert.match(out,/Evidence/);assert.doesNotMatch(out,/127.0.0.1|synthetic-not/);assert.equal(h.calls[0].url,'https://api.tavily.com/search');const body=JSON.parse(h.calls[0].init.body as string);assert.equal(body.search_depth,'basic');assert.equal(body.auto_parameters,false);assert.equal(body.max_results,5);assert.equal(h.calls[0].init.redirect,'error');
+ const out=output(await h.run('web_search',{query:'Workers docs'}));assert.match(out,/Evidence/);assert.doesNotMatch(out,/127.0.0.1|synthetic-not/);assert.equal(h.calls[0].url,'https://api.tavily.com/search');const body=JSON.parse(h.calls[0].init.body as string);assert.equal(body.search_depth,'basic');assert.equal(body.auto_parameters,false);assert.equal(body.max_results,5);assert.equal(h.calls[0].init.redirect,'manual');
 });
 test('extract does not fetch supplied URL and caps text with truncation marker',async()=>{
  const h=harness(enabled,()=>Response.json({results:[{url:'https://example.com/docs',raw_content:'x'.repeat(20000)}]}));const out=output(await h.run('fetch_page',{url:'https://example.com/docs'}));assert.equal(h.calls[0].url,'https://api.tavily.com/extract');assert.equal(JSON.parse(h.calls[0].init.body as string).format,'text');assert.match(out,/"truncated":true/);assert.ok(out.length<16000);
@@ -56,7 +56,7 @@ test('oversize and non-JSON provider responses fail closed',async()=>{
  for(const response of [new Response('x'.repeat(300000),{headers:{'Content-Type':'application/json'}}),new Response('<script>bad</script>')]){const h=harness(enabled,()=>response);const out=output(await h.run('web_search',{query:'public'}));assert.match(out,/error/);assert.ok(out.length<1000);}
 });
 test('cancellation propagates to fetch without exposing errors',async()=>{
- const h=harness(enabled,async(_url,init)=>{assert.equal(init.signal?.aborted,true);throw new Error('aborted secret');});const controller=new AbortController();controller.abort();assert.match(output(await h.run('web_search',{query:'public'},'cancel',controller.signal)),/interrupted/);
+ const h=harness(enabled,async(_url,init)=>{assert.equal(init.signal?.aborted,true);throw new Error('aborted secret');});const controller=new AbortController();controller.abort();assert.match(output(await h.run('web_search',{query:'public'},'cancel',controller.signal)),/aborted or timed out/);
 });
 test('public GitHub has no auth, enforces repo check, escapes path and adds public search qualifier',async()=>{
  const h=harness(enabled,(url)=>Response.json(url.includes('/search/')?{items:[]}:{private:false,html_url:'https://github.com/andrew-kurin/pi-durable-cloudflare-chat',default_branch:'main'}));await h.run('github_search',{kind:'issues',query:'bug',repo:'andrew-kurin/pi-durable-cloudflare-chat'});assert.ok(h.calls.every(c=>c.url.startsWith('https://api.github.com/')));assert.ok(h.calls.every(c=>!new Headers(c.init.headers).has('Authorization')));assert.match(decodeURIComponent(h.calls[1].url),/repo:andrew-kurin\/pi-durable-cloudflare-chat is:public/);
@@ -74,4 +74,12 @@ test('actual Pi harness calls registered GitHub tool and persists its sourced re
  const faux=fauxProvider();faux.setResponses([fauxAssistantMessage([fauxToolCall('github_read',{repo:'owner/repo',kind:'repository'},{id:'read'})],{stopReason:'toolUse'}),fauxAssistantMessage([fauxText('Read the public repository.')])]);
  const models=createModels();models.setProvider(faux.provider);const registry=createRegistry();registry.install(readTools(new Storage(),{},(async()=>Response.json({private:false,html_url:'https://github.com/owner/repo',description:'Public fixture',default_branch:'main'})) as typeof fetch));
  const h=await Harness.open(new MemoryStorage(),{models,registry},context);try{const root=await h.root(context,{agent:{model:{provider:'faux',modelId:'faux-1'}}});const receipt=await root.submit({type:'input',content:'Read fixture',requestId:'offline-tool'},context);assert.equal((await receipt.wait(context)).status,'done');assert.match(JSON.stringify(await root.entries({},30,undefined,context)),/Public fixture/);}finally{await h.close(context);}
+});
+test('key whitespace is normalized server-side, while assignments/quotes/control characters fail before reservation or fetch',async()=>{
+ const good=harness({...enabled,TAVILY_API_KEY:'  synthetic-value\n'},(_url,init)=>{assert.equal(new Headers(init.headers).get('Authorization'),'Bearer synthetic-value');return Response.json({results:[]});});await good.run('web_search',{query:'public'});assert.equal(good.calls.length,1);
+ for(const key of ['export TAVILY_API_KEY=synthetic','TAVILY_API_KEY=synthetic',"'synthetic'",'synthetic\ninner']){const h=harness({...enabled,TAVILY_API_KEY:key});assert.match(output(await h.run('web_search',{query:'public'})),/Search key configuration invalid/);assert.equal(h.calls.length,0);assert.equal(await h.storage.get('tools:tavily:day'),undefined);}
+});
+test('future diagnostics distinguish authentication, transport and invalid JSON without raw errors',async()=>{
+ const cases:[[number|string,string],...Array<[number|string,string]>]=[[401,'authentication rejected'],['throw','transport failed'],['json','Unexpected provider JSON']];
+ for(const [kind,label] of cases){const h=harness(enabled,()=>{if(kind==='throw')throw new Error('secret-network-detail');if(kind==='json')return new Response('bad-secret-json',{headers:{'Content-Type':'application/json'}});return new Response('secret-http-body',{status:kind as number});});const out=output(await h.run('web_search',{query:'public'}));assert.ok(out.includes(label));assert.doesNotMatch(out,/secret-network|secret-http|bad-secret/);}
 });

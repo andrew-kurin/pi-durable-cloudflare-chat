@@ -64,3 +64,13 @@ A separate security reviewer found no blocking issues after encoded-secret and h
 ## One-time direct search check preparation — 2026-10-11
 
 Forty-six offline tests pass. Five new tests establish fixed basic inputs, per-provider usage reporting, max two external calls across concurrent/duplicate requests, missing-key/disabled/normal-web gate denial, failed-search suppression of extraction and permanent claims after interruption. Independent source review found no blocking issue. The check runs tools directly inside the authenticated owner object with the saved key; no model call is needed. Live results are recorded separately after execution.
+
+## Live check failure and workerd redirect regression — 2026-10-11
+
+The owner-approved live check recorded one attempted POST to api.tavily.com/search, failed immediately with the old sanitized `Read unavailable or interrupted` error, and made no extraction attempt. No HTTP status, provider body or usage metadata was received. The durable claim prevents repeating it. No model prompt was sent. Normal web and test mode were subsequently disabled; the saved secret remains encrypted.
+
+Local workerd then reproduced the same failure with entirely intercepted synthetic outbound traffic: `redirect: 'error'` throws TypeError because only follow/manual are implemented, before the outbound handler is invoked (zero dispatches). This identifies a pre-dispatch runtime defect, consistent with the live failure; provider billing was not independently observed. The shared helper also affected GitHub tools. The earlier GitHub smoke test ran in Node and did not establish workerd compatibility.
+
+The helper now requests manual redirects and cancels/rejects every 3xx without following Location or forwarding credentials. Future failures distinguish safe static authentication, transport/timeout and malformed-response categories without retaining raw errors. Key edge whitespace is normalized server-side, with malformed values rejected before reservation or network.
+
+Forty-nine offline tests pass, including native workerd + SQLite execution of both synthetic Tavily steps, permanent one-shot replay prevention, public GitHub reads and redirect refusal. Typecheck, browser syntax and Wrangler dry-run pass. No additional live Tavily request was made during diagnosis. A fresh bounded live check requires separately authorized scope and a reviewed new claim; the old failed claim remains intact. Existing SSE streams can delay Durable Object code replacement until closed; the original unsent draft was preserved while an idle related app stream was temporarily quiesced.
