@@ -8,10 +8,11 @@ import { authorize, secured, type AccessConfig } from './auth';
 import { ChatProjection } from './projector';
 import { guardModels } from './model-guard';
 import { delegation } from './delegate';
+import { readTools } from './read-tools';
 import { createCredentialStore, startSubscriptionLogin, type SubscriptionLoginStatus } from './credentials';
 declare const PI_DEPLOYMENT_MODE: string;
 const deploymentMode = typeof PI_DEPLOYMENT_MODE === 'undefined' ? 'local' : PI_DEPLOYMENT_MODE;
-interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string }
+interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string; TAVILY_API_KEY?:string; ENABLE_WEB_SEARCH?:string }
 export class Assistant extends DurableObject<Env> {
  private credentials = createCredentialStore(this.ctx.storage,this.env.CREDENTIAL_ENCRYPTION_KEY);
  private models = guardModels(createModels({credentials:this.credentials,authContext:{env:async()=>undefined,fileExists:async()=>false}}),async()=>{if(this.env.ENABLE_MODEL!=='true')throw new Error('Model disabled');await this.ctx.storage.transaction(async tx=>{const day=new Date().toISOString().slice(0,10);const count=await tx.get<{day:string,count:number}>('model-quota');const used=count?.day===day?count.count:0;if(used>=150)throw new Error('Daily model request limit');await tx.put('model-quota',{day,count:used+1});});});
@@ -19,7 +20,7 @@ export class Assistant extends DurableObject<Env> {
  private loginActive = false;
  private activeStreams = 0;
  private admission: Promise<unknown> = Promise.resolve();
- harness = new PiHarness({harness:({storage,context})=>{const registry=createRegistry();registry.install(delegation());const provider=createWorkerCodexProvider();this.models.setProvider(provider);return Harness.open(storage,{models:this.models,registry,settings:{compaction:{enabled:false},progress:{partialIntervalMs:250,outputIntervalMs:500},retry:{enabled:true,maxRetries:1,baseDelayMs:1000},stream:{transport:'sse',timeoutMs:120000,maxRetries:0}}},context);},defaults:{model:{provider:'openai-codex',id:'gpt-6-sol'},thinkingLevel:'low'}});
+ harness = new PiHarness({harness:({storage,context})=>{const registry=createRegistry();registry.install(delegation());registry.install(readTools(this.ctx.storage,this.env));const provider=createWorkerCodexProvider();this.models.setProvider(provider);return Harness.open(storage,{models:this.models,registry,settings:{compaction:{enabled:false},progress:{partialIntervalMs:250,outputIntervalMs:500},retry:{enabled:true,maxRetries:1,baseDelayMs:1000},stream:{transport:'sse',timeoutMs:120000,maxRetries:0}}},context);},defaults:{model:{provider:'openai-codex',id:'gpt-6-sol'},thinkingLevel:'low'}});
  lifecycle = Lifecycle.install(this).use(this.harness);
  async fetch(request:Request):Promise<Response>{
   try{await authorize(request,this.env);}catch{return new Response('Forbidden',{status:403});}

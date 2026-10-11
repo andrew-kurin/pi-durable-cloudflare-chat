@@ -54,3 +54,9 @@ The app accepts a configured comma-separated OWNER_EMAILS exact allowlist, retai
 - Config-only flag changes were observed to retain old bindings in a running Durable Object. The deployment script now embeds a non-secret mode marker in the Worker bundle to replace running code when the mode changes. Existing storage and secrets are preserved.
 
 Still unverified: live model responses, real provider token refresh, crash/eviction recovery, comprehensive mobile/desktop visual QA, and exact cost/token limits. No artificial model prompt was sent.
+
+## Public-source tool implementation — 2026-10-11
+
+Forty-one offline tests pass, including actual Pi harness execution with a faux model and mocked GitHub transport, concurrent budget reservations, failed-request accounting, cache/memo reuse, URL/credential rejection, fixed basic Tavily settings, output and response bounds, cancellation, public-only repository checking, and UI activity sanitization. Existing workerd auth/credential tests continue to pass. Typecheck, browser syntax and Wrangler dry-run pass on this Mac. The workerd tests require authorized local socket listeners; provider traffic is mocked.
+
+A separate security reviewer found no blocking issues after encoded-secret and hostname-alias hardening. Known limits are recorded in README: public-DNS classification, heuristic private-query screening, provider extraction boundary and shared-account billing. One unauthenticated GitHub read-tool smoke test retrieved this public repository's metadata. No real Tavily call, model prompt, private repository token, key value access or billing change occurred. Tavily defaults off until user key provisioning and separately approved live test/enablement.

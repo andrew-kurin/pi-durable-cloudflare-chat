@@ -13,6 +13,7 @@ function flag(name) {
 }
 const modelEnabled = flag('ENABLE_MODEL');
 const loginEnabled = flag('ENABLE_SUBSCRIPTION_LOGIN');
+const webSearchEnabled = flag('ENABLE_WEB_SEARCH');
 if (modelEnabled === 'true' && loginEnabled === 'true') throw new Error('Disable subscription setup before enabling model use');
 
 const accountId = required('CLOUDFLARE_ACCOUNT_ID');
@@ -41,7 +42,7 @@ config.preview_urls = false;
 config.observability = { enabled: false };
 // A bundle change restarts live Durable Objects when feature bindings change.
 const mode = modelEnabled === 'true' ? 'chat' : loginEnabled === 'true' ? 'setup' : 'off';
-config.define = { ...(config.define || {}), PI_DEPLOYMENT_MODE: JSON.stringify(mode) };
+config.define = { ...(config.define || {}), PI_DEPLOYMENT_MODE: JSON.stringify(`${mode}:web-${webSearchEnabled}`) };
 config.vars = {
   ACCESS_TEAM_DOMAIN: teamDomain,
   ACCESS_AUD: aud,
@@ -49,6 +50,7 @@ config.vars = {
   APP_ORIGIN: origin,
   ENABLE_MODEL: modelEnabled,
   ENABLE_SUBSCRIPTION_LOGIN: loginEnabled,
+  ENABLE_WEB_SEARCH: webSearchEnabled,
 };
 await writeFile('.deploy.wrangler.json', JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
 console.log(`Prepared production configuration: model=${modelEnabled}, subscriptionLogin=${loginEnabled}.`);

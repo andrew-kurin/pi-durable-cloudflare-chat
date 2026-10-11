@@ -20,10 +20,12 @@ test('production modes default off and permit separately approved login or model
   const result=prepare(flags); assert.equal(result.status,0,result.error);
   assert.equal(result.config.vars.ENABLE_MODEL,flags.ENABLE_MODEL??'false');
   assert.equal(result.config.vars.ENABLE_SUBSCRIPTION_LOGIN,flags.ENABLE_SUBSCRIPTION_LOGIN??'false');
-  assert.equal(result.config.define.PI_DEPLOYMENT_MODE,JSON.stringify(flags.ENABLE_MODEL==='true'?'chat':flags.ENABLE_SUBSCRIPTION_LOGIN==='true'?'setup':'off'));
+  assert.equal(result.config.define.PI_DEPLOYMENT_MODE,JSON.stringify((flags.ENABLE_MODEL==='true'?'chat':flags.ENABLE_SUBSCRIPTION_LOGIN==='true'?'setup':'off')+':web-false'));
   assert.equal(result.mode,0o600); assert.equal(result.config.vars.CREDENTIAL_ENCRYPTION_KEY,undefined);
  }
 });
 test('production config rejects ambiguous flags and concurrent login/model enablement',()=>{
- for(const flags of [{ENABLE_MODEL:'TRUE'},{ENABLE_SUBSCRIPTION_LOGIN:'1'},{ENABLE_MODEL:'true',ENABLE_SUBSCRIPTION_LOGIN:'true'}]) assert.notEqual(prepare(flags).status,0);
+ for(const flags of [{ENABLE_MODEL:'TRUE'},{ENABLE_SUBSCRIPTION_LOGIN:'1'},{ENABLE_WEB_SEARCH:'1'},{ENABLE_MODEL:'true',ENABLE_SUBSCRIPTION_LOGIN:'true'}]) assert.notEqual(prepare(flags).status,0);
 });
+
+test('web enablement defaults off and changes bundle mode without embedding search secret',()=>{const off=prepare({ENABLE_MODEL:'true'}),on=prepare({ENABLE_MODEL:'true',ENABLE_WEB_SEARCH:'true',TAVILY_API_KEY:'synthetic'});assert.equal(off.config.vars.ENABLE_WEB_SEARCH,'false');assert.equal(on.config.vars.ENABLE_WEB_SEARCH,'true');assert.notEqual(off.config.define.PI_DEPLOYMENT_MODE,on.config.define.PI_DEPLOYMENT_MODE);assert.ok(!JSON.stringify(on.config).includes('synthetic\"'));assert.equal(on.config.vars.TAVILY_API_KEY,undefined);});

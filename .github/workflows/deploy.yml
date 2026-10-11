@@ -61,6 +61,7 @@ jobs:
           OWNER_EMAILS: ${{ secrets.OWNER_EMAILS }}
           ENABLE_MODEL: ${{ vars.ENABLE_MODEL }}
           ENABLE_SUBSCRIPTION_LOGIN: ${{ vars.ENABLE_SUBSCRIPTION_LOGIN }}
+          ENABLE_WEB_SEARCH: ${{ vars.ENABLE_WEB_SEARCH }}
       - name: Deploy validated commit
         run: npx --no-install wrangler deploy --config .deploy.wrangler.json
         env:
