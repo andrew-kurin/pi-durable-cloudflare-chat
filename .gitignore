@@ -49,3 +49,6 @@ credentials/
 .DS_Store
 .vscode/
 .idea/
+
+# Generated private deployment configuration
+.deploy.wrangler.json
