@@ -106,3 +106,7 @@ After corrected-origin deployment 38167512105 of 92effb5, owner Chrome displayed
 ## Old entry-point retirement — 2026-10-11
 
 Only after owner Chrome UI/API and unsigned-denial verification, set the persistent production WORKERS_DEV variable to false and deployed the same reviewed 92effb5 source through workflow 38167730805. Deployment succeeded with all validation checks. The dashboard confirms production workers.dev and preview URLs both off, with the production custom-domain binding retained. Unsigned requests to the old homepage/API return 404; the custom-domain homepage/API continue to require Access. Existing Worker, SQLite Durable Object identity, encrypted subscription and tool flags are preserved. The original exact-host Access entry remains configured for a reversible rollback; re-enabling workers.dev also requires restoring the approved original APP_ORIGIN through a reviewed deployment.
+
+## Markdown rendering (local fixtures)
+
+Supports headings, paragraphs, emphasis, lists, quotes, links, inline/fenced code and tables. Tests cover malicious input, incomplete streamed syntax, saved messages and reloads. The browser fixture checks mobile/desktop overflow and existing send/session interactions without live providers. Run `npm test`, `npm run typecheck`, `npm run test:ui` and `npm run build`; `npm run check:ui` verifies the checked-in browser bundle matches its source. This enhancement has not been deployed or verified against a live model.
