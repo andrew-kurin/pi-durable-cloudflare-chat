@@ -110,3 +110,7 @@ Only after owner Chrome UI/API and unsigned-denial verification, set the persist
 ## Markdown rendering (local fixtures)
 
 Supports headings, paragraphs, emphasis, lists, quotes, links, inline/fenced code and tables. Tests cover malicious input, incomplete streamed syntax, saved messages and reloads. The browser fixture checks mobile/desktop overflow and existing send/session interactions without live providers. Run `npm test`, `npm run typecheck`, `npm run test:ui` and `npm run build`; `npm run check:ui` verifies the checked-in browser bundle matches its source. This enhancement has not been deployed or verified against a live model.
+
+## Compact tool activity (synthetic local verification)
+
+Activity is reconstructed from persisted assistant tool calls, tool-result entries and live pending/running slots. Repeated results and reconnect snapshots replace existing rows, and expansion/focus survives streamed refreshes within the selected session. Tests cover Luna/public reads, pending/success/error/interruption, replay, unavailable historical results, oversized/hostile data and session isolation. Native details/summary controls work with keyboard navigation. All tool detail text is bounded and inert; no raw tool arguments, reasoning, results or diagnostics are sent to the browser. Mobile/desktop fixtures use no live providers or persisted fake messages. This feature awaits separate deployment approval.
