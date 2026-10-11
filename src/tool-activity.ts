@@ -1,6 +1,7 @@
 import type { EntryRecord } from '@earendil-works/pi-durable';
 export type ToolState = 'pending' | 'running' | 'success' | 'error' | 'interrupted' | 'unavailable';
-export interface ToolActivity { id: string; label: string; state: ToolState; detail: string; }
+export type ToolLinkage = 'following_response' | 'streaming_response' | 'user_boundary' | 'turn_unavailable' | 'result_unavailable' | 'order_unavailable' | 'no_following_response' | 'unlinked';
+export interface ToolActivity { id: string; label: string; state: ToolState; detail: string; linkage?: ToolLinkage; }
 const labels: Record<string,string> = {web_search:'Web search',fetch_page:'Read web page',github_search:'Search GitHub',github_read:'Read GitHub',ask_luna:'Ask Luna'};
 export const toolLabel = (name: string) => Object.hasOwn(labels,name) ? labels[name] : 'Tool';
 export const stateDetail = (state: ToolState) => ({pending:'Waiting to start.',running:'Working. Arguments and live output are kept private.',success:'Completed. Raw output is kept private.',error:'Failed. Raw error details are kept private.',interrupted:'Interrupted before completion.',unavailable:'No recorded result is available.'})[state];

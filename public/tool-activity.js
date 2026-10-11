@@ -5,7 +5,7 @@ export function toolActivity(document,tools,expanded,onToggle){
  let roundNumber=0;for(const round of rounds.values()){roundNumber++;const group=document.createElement('div');group.className='tool-round';if(rounds.size>1){const caption=document.createElement('p');caption.className='tool-round-label';caption.textContent='Tool round '+roundNumber;group.append(caption);}
  for(const tool of round){
   if(!tool||typeof tool.id!=='string'||!Object.hasOwn(states,tool.state))continue;
-  const row=document.createElement('details');row.className='tool-row';row.dataset.state=tool.state;row.open=expanded.has(tool.id);
+  const row=document.createElement('details');row.className='tool-row';row.dataset.state=tool.state;if(typeof tool.roundId==='string')row.dataset.originMessageId=tool.roundId.slice(0,200);const linkage=['following_response','streaming_response','user_boundary','turn_unavailable','result_unavailable','order_unavailable','no_following_response','unlinked'];if(linkage.includes(tool.linkage))row.dataset.linkage=tool.linkage;row.open=expanded.has(tool.id);
   const summary=document.createElement('summary');summary.dataset.toolId=tool.id;
   const label=document.createElement('span');label.className='tool-label';label.textContent=typeof tool.label==='string'?tool.label.slice(0,80):'Tool';
   const state=document.createElement('span');state.className='tool-state';state.textContent=states[tool.state];summary.append(label,state);

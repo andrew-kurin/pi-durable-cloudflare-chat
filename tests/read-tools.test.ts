@@ -4,7 +4,8 @@ import {readTools,publicUrl,type ToolStorage} from '../src/read-tools';
 import {BACKGROUND_CONTEXT as context} from '@earendil-works/chord/context';
 import {createModels} from '@earendil-works/pi-ai/models';
 import {fauxProvider,fauxAssistantMessage,fauxText,fauxToolCall} from '@earendil-works/pi-ai/providers/faux';
-import {createRegistry,Harness,MemoryStorage} from '@earendil-works/pi-durable';
+import {createRegistry,Harness,MemoryStorage,watchEvents} from '@earendil-works/pi-durable';
+import {ChatProjection} from '../src/projector';
 class Storage implements ToolStorage {
  data=new Map<string,unknown>();queue=Promise.resolve();
  async get<T>(k:string){return this.data.get(k) as T|undefined;}
@@ -73,7 +74,7 @@ test('GitHub search rate budget is shared and cache storage is bounded',async()=
 test('actual Pi harness calls registered GitHub tool and persists its sourced result with faux model only',async()=>{
  const faux=fauxProvider();faux.setResponses([fauxAssistantMessage([fauxToolCall('github_read',{repo:'owner/repo',kind:'repository'},{id:'read'})],{stopReason:'toolUse'}),fauxAssistantMessage([fauxText('Read the public repository.')])]);
  const models=createModels();models.setProvider(faux.provider);const registry=createRegistry();registry.install(readTools(new Storage(),{},(async()=>Response.json({private:false,html_url:'https://github.com/owner/repo',description:'Public fixture',default_branch:'main'})) as typeof fetch));
- const h=await Harness.open(new MemoryStorage(),{models,registry},context);try{const root=await h.root(context,{agent:{model:{provider:'faux',modelId:'faux-1'}}});const receipt=await root.submit({type:'input',content:'Read fixture',requestId:'offline-tool'},context);assert.equal((await receipt.wait(context)).status,'done');assert.match(JSON.stringify(await root.entries({},30,undefined,context)),/Public fixture/);}finally{await h.close(context);}
+ const h=await Harness.open(new MemoryStorage(),{models,registry},context);try{const root=await h.root(context,{agent:{model:{provider:'faux',modelId:'faux-1'}}});const receipt=await root.submit({type:'input',content:'Read fixture',requestId:'offline-tool'},context);assert.equal((await receipt.wait(context)).status,'done');assert.match(JSON.stringify(await root.entries({},30,undefined,context)),/Public fixture/);const events=await watchEvents(h,root.id,context);try{const projection=new ChatProjection();projection.apply(events.snapshot);const reply=projection.view().messages.find(m=>m.text==='Read the public repository.')!;assert.equal(reply.tools.length,1);assert.equal(reply.tools[0].linkage,'following_response');assert.equal(projection.view().messages.filter(m=>!m.text).flatMap(m=>m.tools).length,0);}finally{await events.stop();}}finally{await h.close(context);}
 });
 test('key whitespace is normalized server-side, while assignments/quotes/control characters fail before reservation or fetch',async()=>{
  const good=harness({...enabled,TAVILY_API_KEY:'  synthetic-value\n'},(_url,init)=>{assert.equal(new Headers(init.headers).get('Authorization'),'Bearer synthetic-value');return Response.json({results:[]});});await good.run('web_search',{query:'public'});assert.equal(good.calls.length,1);

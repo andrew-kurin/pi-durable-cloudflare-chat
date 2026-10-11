@@ -1,5 +1,5 @@
 import type { AgentEvent, EntryRecord } from '@earendil-works/pi-durable';
-import { toolLabel, stateDetail, resultSummary, type ToolActivity, type ToolState } from './tool-activity';
+import { toolLabel, stateDetail, resultSummary, type ToolActivity, type ToolState, type ToolLinkage } from './tool-activity';
 export function entryText(entry: EntryRecord) {
  return (entry.model ?? []).flatMap(m => typeof m.content === 'string' ? [m.content] : m.content.flatMap(p => p.type === 'text' ? [p.text] : [])).join('\n');
 }
@@ -50,23 +50,25 @@ export class ChatProjection {
   const unattached:ToolActivity[]=[];
   for(const row of this.tools.values()){
    const {id,label,state,detail}=row;
-   const item={id,label,state,detail,...(row.messageId?{roundId:row.messageId}:{})};
+   const item:{id:string;label:string;state:ToolState;detail:string;roundId?:string;linkage:ToolLinkage}={id,label,state,detail,linkage:'unlinked',...(row.messageId?{roundId:row.messageId}:{})};
    const origin=row.messageId?positions.get(row.messageId):undefined;
    const result=row.resultId?positions.get(row.resultId):undefined;
    let target=row.messageId?byId.get(row.messageId):undefined;
+   if(origin!==undefined)item.linkage=result===undefined?'result_unavailable':result<=origin?'order_unavailable':!this.entries[origin].turnId?'turn_unavailable':'no_following_response';
    // Exact call/result IDs establish the round; transcript boundaries constrain
    // placement. This is chronological response linkage, never sentence inference.
    if(origin!==undefined && result!==undefined && result>origin && this.entries[origin].turnId){
     const turn=this.entries[origin].turnId;
     if(this.entries[result].turnId===turn){
      const next=this.entries.slice(result+1).find(e=>e.turnId!==turn || (e.kind==='pi.assistant' && !!byId.get(e.id)?.text.trim()));
-     if(next?.turnId===turn && next.kind==='pi.assistant') target=byId.get(next.id);
-     else if(!next && this.busy && this.turnId===turn && Object.values(this.partial).some(Boolean)){partialTools.push(item);continue;}
-    }
+     if(next?.turnId===turn && next.kind==='pi.assistant'){target=byId.get(next.id);item.linkage='following_response';}
+     else if(!next && this.busy && this.turnId===turn && Object.values(this.partial).some(Boolean)){item.linkage='streaming_response';partialTools.push(item);continue;}
+     else if(next?.turnId!==undefined && next.turnId!==turn)item.linkage='user_boundary';
+    }else item.linkage='user_boundary';
    }
    if(target)target.tools.push(item);else unattached.push(item);
   }
   if(unattached.length)messages.push({id:'tool-activity',role:'assistant',text:'',tools:unattached});
-  return {messages,partial:Object.values(this.partial).join(''),partialTools,busy:this.busy,activity:this.activity};
+  return {projectionVersion:2,messages,partial:Object.values(this.partial).join(''),partialTools,busy:this.busy,activity:this.activity};
  }
 }
