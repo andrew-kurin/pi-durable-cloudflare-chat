@@ -45,7 +45,9 @@ const config = JSON.parse(await readFile('wrangler.jsonc', 'utf8'));
 if (config.name !== 'pi-private-chat') throw new Error('Unexpected Worker name');
 config.account_id = accountId;
 config.workers_dev = workersDev === 'true';
-config.routes = customDomain ? [{pattern:customDomain,custom_domain:true}] : [];
+// Routing is managed in the dashboard. Omission prevents Wrangler domain/route writes.
+delete config.routes;
+delete config.route;
 config.preview_urls = false;
 config.observability = { enabled: false };
 // A bundle change restarts live Durable Objects when feature bindings change.

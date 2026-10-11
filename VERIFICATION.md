@@ -86,3 +86,7 @@ Deployed test-preparation commit 69c4e73 via workflow 38160224384. The authentic
 ## Custom-domain preparation — 2026-10-11
 
 Fifty-four offline tests, typecheck, browser syntax and Wrangler dry-run pass for explicit custom-domain origin/route support and opt-in workers.dev retirement. Independent review found no security blocker. The same Worker and Durable Object binding remain unchanged. Exact hostname Access protection was established first using the existing app/policy/providers. DNS attachment, live origin deployment, owner verification and old-entry retirement remain pending at this preparation checkpoint.
+
+## Dashboard-managed domain routing revision — 2026-10-11
+
+The generator now omits both route fields, preserving dashboard-managed custom-domain routing without granting CI zone-routing permissions. Installed Wrangler 4.149.0 invokes route/custom-domain publication only for nonempty corresponding lists; omission skips its domain-record PUT. Explicit workers.dev controls remain, with retirement gated on custom-origin configuration and owner verification. All 54 offline tests, typecheck, browser syntax and dry-run pass. Live binding persistence will be verified after the approved dashboard attachment/deployment.
