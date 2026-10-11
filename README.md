@@ -1,6 +1,6 @@
 # Private Pi on Cloudflare
 
-A small, owner-only mobile web chat using Cloudflare's official PiHarness integration (Agents 0.28.0; Pi Durable/Pi AI 1.1.0). Setup preview prepared locally; **not deployed or production-verified**. No existing subscription credentials were read or copied. No live model requests were made during this build.
+A small, owner-only mobile web chat using Cloudflare's official PiHarness integration (Agents 0.28.0; Pi Durable/Pi AI 1.1.0). Deployed as an owner-only prototype behind Cloudflare Access. A separately approved subscription device connection is stored encrypted in the Durable Object; further login is disabled and model use is enabled for user-submitted chats. Live model responses and real-cloud recovery remain unverified. No existing local subscription credentials were read or copied, and no artificial live model prompts were sent.
 
 ## What is implemented
 
@@ -32,8 +32,8 @@ Build is `wrangler deploy --dry-run` and does not publish. Local scripts default
 4. In Cloudflare Zero Trust, create an Access application for the exact hostname (or enable Worker-level Access for all entry points). Use an existing identity provider or email One-time PIN. Allow only the owner's exact email, never Everyone or an OTP-method-only Include policy. Zero Trust Free covers up to 50 users but may require user-entered payment details during enrollment.
 5. Set nonsecret variables ACCESS_TEAM_DOMAIN (`https://TEAM.cloudflareaccess.com`), ACCESS_AUD (application audience), OWNER_EMAILS, APP_ORIGIN. Keep previews disabled. Validate an unauthenticated request is denied and a different email is denied before enabling model use. Static assets run Worker first so cannot bypass code-level authentication.
 6. With explicit authorization to create/store credentials, generate a random 32-byte base64 CREDENTIAL_ENCRYPTION_KEY directly in the deployment environment and store using `wrangler secret put`; do not display it, attach it or paste into chat. Keep the same key for existing encrypted records. It protects database snapshots from disclosure without also compromising the secret, but does not protect against a compromised authorized runtime.
-7. New subscription device login is a separate persistent model-access grant. Only enable after user approval and runtime verification; user completes OpenAI consent themselves on the official provider page. Existing local subscription tokens are not imported. Provider policy, subscription eligibility and network acceptance from Workers need a separately authorized live check. No claim is made that Workers-hosted subscription access is guaranteed by OpenAI.
-8. Verify authenticated login, session persistence and recovery with the user-approved small model budget before setting ENABLE_MODEL true for normal use. A deploy is not proof of live model compatibility.
+7. New subscription device login is a separate persistent model-access grant. Only enable after user approval and runtime verification; user completes OpenAI consent themselves on the official provider page. Existing local subscription tokens are not imported. Device sign-in from Workers has been observed to succeed for the owner; model transport, refresh, provider policy and broader subscription eligibility still need live verification. No claim is made that Workers-hosted subscription access is guaranteed by OpenAI.
+8. Use a user-submitted small first prompt to verify model compatibility before relying on normal use, then separately verify recovery within the approved model budget. Enabling ENABLE_MODEL and a successful deploy do not prove live model compatibility.
 
 ## Important limitations
 
