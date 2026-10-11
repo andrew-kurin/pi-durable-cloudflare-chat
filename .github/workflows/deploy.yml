@@ -58,6 +58,8 @@ jobs:
           ACCESS_TEAM_DOMAIN: ${{ vars.ACCESS_TEAM_DOMAIN }}
           ACCESS_AUD: ${{ vars.ACCESS_AUD }}
           APP_ORIGIN: ${{ vars.APP_ORIGIN }}
+          CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
+          WORKERS_DEV: ${{ vars.WORKERS_DEV }}
           OWNER_EMAILS: ${{ secrets.OWNER_EMAILS }}
           ENABLE_MODEL: ${{ vars.ENABLE_MODEL }}
           ENABLE_SUBSCRIPTION_LOGIN: ${{ vars.ENABLE_SUBSCRIPTION_LOGIN }}

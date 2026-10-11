@@ -82,3 +82,7 @@ The owner explicitly authorized deployment and a new basic search/extraction che
 ## Successful bounded live tools check — 2026-10-11
 
 Deployed test-preparation commit 69c4e73 via workflow 38160224384. The authenticated owner button ran exactly one basic Tavily search and one extraction, without a model prompt or retry. Search returned five sources and reported 1 credit; extraction returned the official Pi page, 12,000 characters with truncation indicated, and reported 0 credits. Reported usage totaled 1 credit, within the approved maximum of 2. The actual Cloudflare runtime also passed one public repository read and one repository search (four results including this repository), with no GitHub token. The previous failed v1 record remains present. Paid Tavily usage remains disabled per the owner's confirmation; no billing setting was altered. Subscription, authentication, encryption secret and quota limits were preserved. Normal web activation follows by disabling test mode through the same manual workflow.
+
+## Custom-domain preparation — 2026-10-11
+
+Fifty-four offline tests, typecheck, browser syntax and Wrangler dry-run pass for explicit custom-domain origin/route support and opt-in workers.dev retirement. Independent review found no security blocker. The same Worker and Durable Object binding remain unchanged. Exact hostname Access protection was established first using the existing app/policy/providers. DNS attachment, live origin deployment, owner verification and old-entry retirement remain pending at this preparation checkpoint.
