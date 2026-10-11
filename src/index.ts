@@ -31,6 +31,7 @@ export class Assistant extends DurableObject<Env> {
    if(path==='/api/status'&&request.method==='GET')return Response.json({modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId==='openai-codex'),login:this.loginStatus});
    if(path==='/api/login'&&request.method==='POST'){
     if(this.env.ENABLE_SUBSCRIPTION_LOGIN!=='true')return Response.json({error:'Subscription setup is not enabled'},{status:403});
+    if((await this.credentials.list()).some(x=>x.providerId==='openai-codex'))return Response.json({error:'Subscription is already connected.'},{status:409});
     if(this.loginActive)return Response.json(this.loginStatus);
     await this.harness.pi();this.loginActive=true;
     const abort=new AbortController();const timer=setTimeout(()=>abort.abort(),5*60*1000);

@@ -6,6 +6,15 @@ function required(name) {
   return value;
 }
 
+function flag(name) {
+  const value = process.env[name]?.trim() || 'false';
+  if (value !== 'true' && value !== 'false') throw new Error(`Invalid production flag: ${name}`);
+  return value;
+}
+const modelEnabled = flag('ENABLE_MODEL');
+const loginEnabled = flag('ENABLE_SUBSCRIPTION_LOGIN');
+if (modelEnabled === 'true' && loginEnabled === 'true') throw new Error('Disable subscription setup before enabling model use');
+
 const accountId = required('CLOUDFLARE_ACCOUNT_ID');
 if (!/^[a-f0-9]{32}$/i.test(accountId)) throw new Error('Invalid account ID');
 const teamDomain = required('ACCESS_TEAM_DOMAIN');
@@ -35,8 +44,8 @@ config.vars = {
   ACCESS_AUD: aud,
   OWNER_EMAILS: [...new Set(owners)].join(','),
   APP_ORIGIN: origin,
-  ENABLE_MODEL: 'false',
-  ENABLE_SUBSCRIPTION_LOGIN: 'false',
+  ENABLE_MODEL: modelEnabled,
+  ENABLE_SUBSCRIPTION_LOGIN: loginEnabled,
 };
 await writeFile('.deploy.wrangler.json', JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
-console.log('Prepared production configuration with model and subscription login disabled.');
+console.log(`Prepared production configuration: model=${modelEnabled}, subscriptionLogin=${loginEnabled}.`);
