@@ -14,11 +14,17 @@ test('actual worker rejects unauthenticated access; owner can persist sessions w
   const list=await mf.dispatchFetch('https://chat.example.test/api/sessions',{headers});assert.equal(list.status,200);assert.ok((await list.json() as any[]).some(x=>x.id==='1'));
   const created=await mf.dispatchFetch('https://chat.example.test/api/sessions',{method:'POST',headers,body:'{}'});assert.equal(created.status,200);const id=(await created.json() as any).id;assert.notEqual(id,'1');
   const again=await mf.dispatchFetch('https://chat.example.test/api/sessions',{headers});assert.ok((await again.json() as any[]).some(x=>x.id===id));
+  const titlePath='https://chat.example.test/api/session-title?session='+id;
+  assert.equal((await mf.dispatchFetch(titlePath,{method:'POST',headers,body:JSON.stringify({title:'Public project research'})})).status,200);
+  assert.equal((await mf.dispatchFetch(titlePath,{method:'POST',headers,body:JSON.stringify({title:'x'.repeat(81)})})).status,400);
+  assert.equal((await mf.dispatchFetch(titlePath,{method:'POST',headers:{...headers,origin:'https://other.example.test'},body:'{"title":"Wrong origin"}'})).status,403);
+  const titled=await mf.dispatchFetch('https://chat.example.test/api/sessions',{headers});assert.equal((await titled.json() as any[]).find(s=>s.id===id).title,'Public project research');
   const alternateHeaders={...headers,'Cf-Access-Jwt-Assertion':await signed('alternate@example.test')};
   const shared=await mf.dispatchFetch('https://chat.example.test/api/sessions',{headers:alternateHeaders});assert.equal(shared.status,200);assert.ok((await shared.json() as any[]).some(x=>x.id===id));
   assert.equal((await mf.dispatchFetch('https://chat.example.test/api/sessions',{headers:{...headers,'Cf-Access-Jwt-Assertion':await signed('other@example.test')}})).status,403);
   assert.equal((await mf.dispatchFetch('https://chat.example.test/api/submit',{method:'POST',headers,body:JSON.stringify({text:'No paid calls',operationId:'test-only-123'})})).status,503);
   assert.equal((await mf.dispatchFetch('https://chat.example.test/api/login',{method:'POST',headers,body:'{}'})).status,403);
   const events=await mf.dispatchFetch('https://chat.example.test/api/events',{headers});assert.equal(events.status,200);const reader=events.body!.getReader();const first=await reader.read();assert.ok(new TextDecoder().decode(first.value).startsWith('data: '));await reader.cancel();
+  const renamedEvents=await mf.dispatchFetch('https://chat.example.test/api/events?session='+id,{headers});const renamedReader=renamedEvents.body!.getReader();assert.ok(new TextDecoder().decode((await renamedReader.read()).value).includes('Public project research'));await renamedReader.cancel();
  }finally{await mf.dispose();}
 });

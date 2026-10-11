@@ -49,8 +49,8 @@ export class ChatProjection {
   const partialTools:(ToolActivity & {roundId?:string})[]=[];
   const unattached:ToolActivity[]=[];
   for(const row of this.tools.values()){
-   const {id,label,state,detail}=row;
-   const item:{id:string;label:string;state:ToolState;detail:string;roundId?:string;linkage:ToolLinkage}={id,label,state,detail,linkage:'unlinked',...(row.messageId?{roundId:row.messageId}:{})};
+   const {id,label,state,detail,summary,sources}=row;
+   const item:ToolActivity & {roundId?:string;linkage:ToolLinkage}={id,label,state,detail,...(summary?{summary}:{}),...(sources?{sources}:{}),linkage:'unlinked',...(row.messageId?{roundId:row.messageId}:{})};
    const origin=row.messageId?positions.get(row.messageId):undefined;
    const result=row.resultId?positions.get(row.resultId):undefined;
    let target=row.messageId?byId.get(row.messageId):undefined;

@@ -6,6 +6,7 @@ import { createWorkerCodexProvider } from './oauth-loader';
 import { createRegistry, Harness } from '@earendil-works/pi-durable';
 import { authorize, secured, type AccessConfig } from './auth';
 import { ChatProjection } from './projector';
+import { conversationTitle } from './conversation-title';
 import { guardModels } from './model-guard';
 import { delegation } from './delegate';
 import { readTools } from './read-tools';
@@ -51,7 +52,13 @@ export class Assistant extends DurableObject<Env> {
     },cancel:()=>{abort.abort();}});
     return new Response(body,{headers:{'Content-Type':'application/x-ndjson','Cache-Control':'no-store'}});
    }
-   if(path==='/api/sessions'&&request.method==='GET')return Response.json((await this.harness.sessions.list()).filter(x=>!x.parent));
+   if(path==='/api/sessions'&&request.method==='GET')return Response.json(await Promise.all((await this.harness.sessions.list()).filter(x=>!x.parent).map(async s=>({...s,title:await this.ctx.storage.get<string>(`chat-title:${s.id}`)??await this.ctx.storage.get<string>(`chat-auto-title:${s.id}`)??''}))));
+   if(path==='/api/session-title'&&request.method==='POST'){
+    const raw=await request.text();if(raw.length>1000)return Response.json({error:'Title too long'},{status:400});
+    const b=JSON.parse(raw);if(typeof b.title!=='string'||!b.title.trim()||b.title.length>80||/[\x00-\x1f\x7f]/.test(b.title))return Response.json({error:'Use a title of 1–80 characters'},{status:400});
+    if(!(await this.harness.sessions.list()).some(s=>s.id===sid&&!s.parent))return Response.json({error:'Conversation not found'},{status:404});
+    await this.ctx.storage.put(`chat-title:${sid}`,b.title.trim());return Response.json({title:b.title.trim()});
+   }
    if(path==='/api/sessions'&&request.method==='POST'){
     if((await this.harness.sessions.list()).length>=100)return Response.json({error:'Session limit reached'},{status:429});
     const s=await this.harness.sessions.create();return Response.json({id:s.id});
@@ -74,16 +81,17 @@ export class Assistant extends DurableObject<Env> {
      });
      if(!reserved)return Response.json({error:'Daily limit of 50 messages reached'},{status:429});
     }
-    const receipt=await this.harness.submit(b.text,{session:sid,operationId:b.operationId});await this.ctx.storage.put(key,{digest,receipt});return Response.json(receipt);
+    const receipt=await this.harness.submit(b.text,{session:sid,operationId:b.operationId});await this.ctx.storage.put(key,{digest,receipt});if(!await this.ctx.storage.get(`chat-auto-title:${sid}`)){const title=conversationTitle(b.text);if(title)await this.ctx.storage.put(`chat-auto-title:${sid}`,title);}return Response.json(receipt);
    }
    if(path==='/api/abort'&&request.method==='POST')return Response.json({aborted:await this.harness.abort({session:sid})});
    if(path==='/api/events'&&request.method==='GET'){
     if(this.activeStreams>=3)return Response.json({error:'Too many open chats'},{status:429});
     this.activeStreams++;let events;try{events=await this.harness.session(sid).events();}catch(error){this.activeStreams--;throw error;}const projection=new ChatProjection();projection.apply(events.snapshot);
+    const customTitle=await this.ctx.storage.get<string>(`chat-title:${sid}`);const autoTitle=await this.ctx.storage.get<string>(`chat-auto-title:${sid}`);const title=customTitle??autoTitle??conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text);
     const encoder=new TextEncoder();let ended=false;let timer:ReturnType<typeof setTimeout>;
     const stop=async()=>{if(ended)return;ended=true;clearTimeout(timer);this.activeStreams--;await events.stop();};
     const body=new ReadableStream<Uint8Array>({start:controller=>{
-     const send=()=>{if(!ended)controller.enqueue(encoder.encode(`data: ${JSON.stringify(projection.view())}\n\n`));};send();
+     const send=()=>{if(!ended)controller.enqueue(encoder.encode(`data: ${JSON.stringify({...projection.view(),title:title||conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text)})}\n\n`));};send();
      events.start(async batch=>{batch.forEach(e=>projection.apply(e));send();});
      timer=setTimeout(()=>{if(!ended){controller.close();void stop();}},55000);
      request.signal.addEventListener('abort',()=>{void stop();},{once:true});
