@@ -9,10 +9,11 @@ import { ChatProjection } from './projector';
 import { guardModels } from './model-guard';
 import { delegation } from './delegate';
 import { readTools } from './read-tools';
+import {runSearchCheck,searchCheckStatus} from './search-check';
 import { createCredentialStore, startSubscriptionLogin, type SubscriptionLoginStatus } from './credentials';
 declare const PI_DEPLOYMENT_MODE: string;
 const deploymentMode = typeof PI_DEPLOYMENT_MODE === 'undefined' ? 'local' : PI_DEPLOYMENT_MODE;
-interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string; TAVILY_API_KEY?:string; ENABLE_WEB_SEARCH?:string }
+interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string; TAVILY_API_KEY?:string; ENABLE_WEB_SEARCH?:string; ENABLE_WEB_SEARCH_TEST?:string }
 export class Assistant extends DurableObject<Env> {
  private credentials = createCredentialStore(this.ctx.storage,this.env.CREDENTIAL_ENCRYPTION_KEY);
  private models = guardModels(createModels({credentials:this.credentials,authContext:{env:async()=>undefined,fileExists:async()=>false}}),async()=>{if(this.env.ENABLE_MODEL!=='true')throw new Error('Model disabled');await this.ctx.storage.transaction(async tx=>{const day=new Date().toISOString().slice(0,10);const count=await tx.get<{day:string,count:number}>('model-quota');const used=count?.day===day?count.count:0;if(used>=150)throw new Error('Daily model request limit');await tx.put('model-quota',{day,count:used+1});});});
@@ -31,7 +32,12 @@ export class Assistant extends DurableObject<Env> {
   const url=new URL(request.url);const path=url.pathname;const sid=url.searchParams.get('session')??'1';
   if(!/^\d{1,12}$/.test(sid))return Response.json({error:'Invalid session'},{status:400});
   try{
-   if(path==='/api/status'&&request.method==='GET')return Response.json({deploymentMode,modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId==='openai-codex'),login:this.loginStatus});
+   if(path==='/api/status'&&request.method==='GET')return Response.json({deploymentMode,modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId==='openai-codex'),login:this.loginStatus,webSearchEnabled:this.env.ENABLE_WEB_SEARCH==='true',searchKeyPresent:!!this.env.TAVILY_API_KEY,canCheckSearch:this.env.ENABLE_WEB_SEARCH_TEST==='true'&&this.env.ENABLE_WEB_SEARCH!=='true'&&!!this.env.TAVILY_API_KEY,searchCheck:await searchCheckStatus(this.ctx.storage)});
+   if(path==='/api/search-check'&&request.method==='POST'){
+    if(this.env.ENABLE_WEB_SEARCH_TEST!=='true'||this.env.ENABLE_WEB_SEARCH==='true'||!this.env.TAVILY_API_KEY)return Response.json({error:'Search check is not enabled'},{status:403});
+    const body=await request.text();if(body!=='{"action":"run-approved-search-check"}')return Response.json({error:'Invalid search check'},{status:400});
+    return Response.json(await runSearchCheck(this.ctx.storage,this.env));
+   }
    if(path==='/api/login'&&request.method==='POST'){
     if(this.env.ENABLE_SUBSCRIPTION_LOGIN!=='true')return Response.json({error:'Subscription setup is not enabled'},{status:403});
     if((await this.credentials.list()).some(x=>x.providerId==='openai-codex'))return Response.json({error:'Subscription is already connected.'},{status:409});

@@ -62,6 +62,7 @@ jobs:
           ENABLE_MODEL: ${{ vars.ENABLE_MODEL }}
           ENABLE_SUBSCRIPTION_LOGIN: ${{ vars.ENABLE_SUBSCRIPTION_LOGIN }}
           ENABLE_WEB_SEARCH: ${{ vars.ENABLE_WEB_SEARCH }}
+          ENABLE_WEB_SEARCH_TEST: ${{ vars.ENABLE_WEB_SEARCH_TEST }}
       - name: Deploy validated commit
         run: npx --no-install wrangler deploy --config .deploy.wrangler.json
         env:

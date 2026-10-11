@@ -9,6 +9,6 @@
  "assets":{"directory":"./public","binding":"ASSETS","run_worker_first":true},
  "durable_objects":{"bindings":[{"name":"Assistant","class_name":"Assistant"}]},
  "migrations":[{"tag":"v1","new_sqlite_classes":["Assistant"]}],
- "vars":{"ACCESS_TEAM_DOMAIN":"","ACCESS_AUD":"","OWNER_EMAILS":"","APP_ORIGIN":"","ENABLE_MODEL":"false","ENABLE_SUBSCRIPTION_LOGIN":"false","ENABLE_WEB_SEARCH":"false"},
+ "vars":{"ACCESS_TEAM_DOMAIN":"","ACCESS_AUD":"","OWNER_EMAILS":"","APP_ORIGIN":"","ENABLE_MODEL":"false","ENABLE_SUBSCRIPTION_LOGIN":"false","ENABLE_WEB_SEARCH":"false","ENABLE_WEB_SEARCH_TEST":"false"},
  "observability":{"enabled":false}
 }
