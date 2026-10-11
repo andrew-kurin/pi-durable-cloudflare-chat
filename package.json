@@ -13,7 +13,7 @@
     "dev": "wrangler dev --local",
     "build:ui": "node scripts/build-ui.mjs",
     "check:ui": "node scripts/build-ui.mjs --check",
-    "test:ui": "node tests/ui.mjs"
+    "test:ui": "node --import tsx tests/ui.mjs"
   },
   "keywords": [],
   "author": "",

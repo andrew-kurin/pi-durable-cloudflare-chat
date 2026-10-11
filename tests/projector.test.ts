@@ -31,3 +31,26 @@ test('live snapshot slots preserve pending/running; missing historical or orphan
 test('oversize tool payloads and unknown tool names never leak output, args or arbitrary labels',()=>{
  const p=new ChatProjection();p.entry(assistant('a',[{id:'c',name:'<img onerror=attack>'}]));p.entry(resultEntry('c','<img onerror=attack>',{text:'sensitive'.repeat(10000)}));const view=JSON.stringify(p.view());assert.ok(view.length<700);assert.ok(!view.includes('sensitive'));assert.ok(!view.includes('onerror'));assert.equal(p.view().messages[0].tools[0].label,'Tool');
 });
+function user(id:string){return {id,kind:'pi.user',model:[{role:'user',content:'Question'}]} as never;}
+function answer(id:string,text:string){return {id,kind:'pi.assistant',model:[{role:'assistant',content:[{type:'text',text}]}]} as never;}
+test('completed rounds follow their recorded results to response text within the same user turn',()=>{
+ const p=new ChatProjection();p.apply(snapshot([user('u'),assistant('a',[{id:'c',name:'web_search'}]),resultEntry('c','web_search',{results:[]}),answer('reply','A long answer '.repeat(500))]));
+ assert.equal(p.view().messages.find(m=>m.id==='a')!.tools.length,0);const response=p.view().messages.find(m=>m.id==='reply')!;assert.equal(response.tools[0].id,'c');assert.equal(response.tools[0].roundId,'a');assert.equal(response.tools[0].state,'success');
+});
+test('multiple tool rounds and assistant segments preserve chronology and do not collect unrelated turns',()=>{
+ const entries=[user('u1'),assistant('round1',[{id:'c1',name:'web_search'}]),resultEntry('c1','web_search'),answer('segment','First finding'),assistant('round2',[{id:'c2',name:'github_read'}]),resultEntry('c2','github_read'),assistant('round3',[{id:'c3',name:'ask_luna'}]),resultEntry('c3','ask_luna'),answer('final','Final finding'),user('u2'),answer('other','Unrelated answer')];
+ const p=new ChatProjection();p.apply(snapshot(entries));const view=p.view();assert.deepEqual(view.messages.find(m=>m.id==='segment')!.tools.map(t=>t.id),['c1']);assert.deepEqual(view.messages.find(m=>m.id==='final')!.tools.map(t=>[t.id,t.roundId]),[['c2','round2'],['c3','round3']]);assert.equal(view.messages.find(m=>m.id==='other')!.tools.length,0);assert.equal(view.messages.flatMap(m=>m.tools).length,3);
+ for(let i=0;i<2;i++){p.apply(snapshot(entries));for(const entry of entries)p.apply({type:'entry_appended',entry});assert.deepEqual(p.view(),view);}
+});
+test('recorded results sit beside streamed response and migrate once to its committed identity',()=>{
+ const p=new ChatProjection();p.apply(snapshot([user('u'),assistant('a',[{id:'c',name:'ask_luna'}]),resultEntry('c','ask_luna')],[],{inputs:[]}));
+ p.apply({type:'message_update',usage:{} as never,changes:[{type:'text_delta',contentIndex:0,delta:'Partial answer'}]});assert.equal(p.view().partialTools[0].id,'c');assert.equal(p.view().messages.flatMap(m=>m.tools).length,0);
+ const snap={...snapshot([user('u'),assistant('a',[{id:'c',name:'ask_luna'}]),resultEntry('c','ask_luna')],[],{inputs:[]}) as any,generation:{message:{content:[{type:'text',text:'Partial answer'}]}}};p.apply(snap);assert.equal(p.view().partialTools[0].id,'c');
+ p.apply({type:'message_end',entry:answer('final','Finished')});assert.equal(p.view().partialTools.length,0);assert.equal(p.view().messages.find(m=>m.id==='final')!.tools[0].id,'c');
+});
+test('missing linkage, missing result, late results after user boundary and resets remain at origin',()=>{
+ for(const entries of [[user('u'),assistant('a',[{id:'c',name:'github_read'}]),answer('reply','No result')],[user('u'),assistant('a',[{id:'c',name:'github_read'}]),resultEntry('c','github_read'),user('next'),answer('reply','New question')],[user('u'),assistant('a',[{id:'c',name:'github_read'}]),user('next'),resultEntry('c','github_read'),answer('reply','Late result')],[user('u'),assistant('a',[{id:'c',name:'github_read'}]),resultEntry('c','github_read'),{id:'reset',kind:'pi.reset'} as never,answer('reply','Reset answer')],[assistant('a',[{id:'c',name:'github_read'}]),resultEntry('c','github_read'),answer('reply','Historical boundary unknown')]]){const p=new ChatProjection();p.apply(snapshot(entries));assert.equal(p.view().messages.find(m=>m.id==='a')!.tools[0].id,'c');assert.equal(p.view().messages.find(m=>m.id==='reply')!.tools.length,0);}
+});
+test('failed and interrupted rounds remain response local without exposing diagnostics',()=>{
+ for(const [error,code,state] of [[true,undefined,'error'],[true,'aborted','interrupted']] as const){const p=new ChatProjection();p.apply(snapshot([user('u'),assistant('a',[{id:'c',name:'ask_luna'}]),resultEntry('c','ask_luna',{},error,code),answer('reply','Safe explanation')]));const row=p.view().messages.find(m=>m.id==='reply')!.tools[0];assert.equal(row.state,state);assert.ok(!JSON.stringify(p.view()).includes('raw secret diagnostic'));}
+});

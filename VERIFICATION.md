@@ -114,3 +114,9 @@ Supports headings, paragraphs, emphasis, lists, quotes, links, inline/fenced cod
 ## Compact tool activity (synthetic local verification)
 
 Activity is reconstructed from persisted assistant tool calls, tool-result entries and live pending/running slots. Repeated results and reconnect snapshots replace existing rows, and expansion/focus survives streamed refreshes within the selected session. Tests cover Luna/public reads, pending/success/error/interruption, replay, unavailable historical results, oversized/hostile data and session isolation. Native details/summary controls work with keyboard navigation. All tool detail text is bounded and inert; no raw tool arguments, reasoning, results or diagnostics are sent to the browser. Mobile/desktop fixtures use no live providers or persisted fake messages. This feature awaits separate deployment approval.
+
+## Response-local tool placement (awaiting deployment)
+
+73 offline tests pass, with typecheck, browser syntax, Wrangler dry-run and isolated mobile/desktop checks. Exact call/result entry IDs and ordered user/reset/context-head boundaries constrain placement; tools are never assigned across a new question or missing historical boundary. Completed rounds sit beneath the next response segment or streaming partial, once only; missing results retain origin placement. Multiple rounds preserve call order and distinct round labels. Long-answer fixtures verify bottom following, reader scroll position, expansion/focus, partial completion, reloads and session switches. Independent review confirmed the amended change has no remaining blockers.
+
+Existing production history was inspected read-only: 27 visible message segments, 13 unique tool rows (12 completed, one failed), Connected state. Production still uses the earlier placement; this change has only synthetic local verification until separately approved deployment. No new model/Tavily calls or fake persisted messages were made.
