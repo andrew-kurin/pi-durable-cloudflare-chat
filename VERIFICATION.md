@@ -90,3 +90,9 @@ Fifty-four offline tests, typecheck, browser syntax and Wrangler dry-run pass fo
 ## Dashboard-managed domain routing revision — 2026-10-11
 
 The generator now omits both route fields, preserving dashboard-managed custom-domain routing without granting CI zone-routing permissions. Installed Wrangler 4.149.0 invokes route/custom-domain publication only for nonempty corresponding lists; omission skips its domain-record PUT. Explicit workers.dev controls remain, with retirement gated on custom-origin configuration and owner verification. All 54 offline tests, typecheck, browser syntax and dry-run pass. Live binding persistence will be verified after the approved dashboard attachment/deployment.
+
+## Protected domain attachment and browser checkpoint — 2026-10-11
+
+Attached the approved hostname in the dashboard after adding it to the existing owner-only Access application. Deployment of 6529740 via workflow 38162320684 succeeded, and the binding persisted with both route fields omitted. Unsigned HTTPS homepage and API requests returned Access login redirects; no certificate error occurred. Owner Chrome navigation instead showed client blocking and a redirect-loop error, so owner UI/API verification is incomplete and the old entry point was not retired.
+
+Restored the original APP_ORIGIN and kept workers.dev enabled through workflow 38162580677, using the same deployed source commit. The original owner UI again shows the existing chat, connected subscription and available public web/GitHub tools. Normal web remains enabled and test/login modes disabled. The new hostname remains bound and Access-protected, but application access there requires a future approved origin switch and successful owner browser verification. No provider/model calls, secret reads, new grants or billing changes were needed for these routing checks. Live recovery and full visual QA remain unverified.
