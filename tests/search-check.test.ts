@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {runSearchCheck,searchCheckStatus} from '../src/search-check';import type {ToolStorage} from '../src/read-tools';
+import {runSearchCheck,searchCheckStatus,runGithubCheck} from '../src/search-check';import type {ToolStorage} from '../src/read-tools';
 class Storage implements ToolStorage {
  values=new Map<string,unknown>();queue=Promise.resolve();
  async get<T>(key:string){return structuredClone(this.values.get(key)) as T|undefined;}
@@ -25,6 +25,11 @@ test('credit-limit/basic search failure prevents extraction and retry',async()=>
  const storage=new Storage();let calls=0;const http=(async()=>{calls++;return new Response('credit limit secret-like body',{status:429});}) as typeof fetch;const first=await runSearchCheck(storage,env,http);assert.equal(first.status,'failed');assert.deepEqual(first.attempts,['web_search']);assert.ok(!JSON.stringify(first).includes('secret-like'));assert.equal((await searchCheckStatus(storage))?.reason,'Provider rate limit or access restriction');await runSearchCheck(storage,env,http);assert.equal(calls,1);
 });
 test('an interrupted claimed check never repeats; failed extraction has no fallback',async()=>{
- const f=fixture();await f.storage.put('tools:approved-search-check:v1',{status:'running',attempts:['web_search']});assert.equal((await runSearchCheck(f.storage,env,f.http)).status,'running');assert.equal(f.calls.length,0);
+ const f=fixture();await f.storage.put('tools:approved-search-check:v2',{status:'running',attempts:['web_search']});assert.equal((await runSearchCheck(f.storage,env,f.http)).status,'running');assert.equal(f.calls.length,0);
  const other=fixture();let n=0;const http=(async(url:any,init:any)=>{n++;return n===1?other.http(url,init):new Response('failure',{status:429});}) as typeof fetch;assert.equal((await runSearchCheck(other.storage,env,http)).status,'failed');await runSearchCheck(other.storage,env,http);assert.equal(n,2);
 });
+
+test('new approved claim preserves earlier failed claim byte-for-byte',async()=>{const f=fixture();const previous={status:'failed',attempts:['web_search'],error:'original failure'};await f.storage.put('tools:approved-search-check:v1',previous);await runSearchCheck(f.storage,env,f.http);assert.deepEqual(await f.storage.get('tools:approved-search-check:v1'),previous);assert.equal(f.calls.length,2);});
+
+test('GitHub verification makes exactly two fixed public calls across repeated checks',async()=>{const f=fixture();const calls:string[]=[];const url='https://github.com/andrew-kurin/pi-durable-cloudflare-chat';const http=(async(input:any,init:any)=>{calls.push(String(input));assert.equal(init.headers.Authorization,undefined);return Response.json(String(input).includes('/search/')?{items:[{html_url:url,full_name:'andrew-kurin/pi-durable-cloudflare-chat'}]}:{private:false,html_url:url});}) as typeof fetch;assert.equal((await runGithubCheck(f.storage,http)).status,'passed');await runGithubCheck(f.storage,http);assert.equal(calls.length,2);assert.ok(calls.every(c=>c.startsWith('https://api.github.com/')));});
+test('unexpected provider usage prevents extraction or marks extraction failure without retry',async()=>{for(const phase of ['search','extract']){const f=fixture();let calls=0;const http=(async(input:any,init:any)=>{calls++;const response=await f.http(input,init);const body=await response.json() as any;if(String(input).endsWith('/'+phase))body.usage.credits=3;return Response.json(body);}) as typeof fetch;assert.equal((await runSearchCheck(f.storage,env,http)).status,'failed');assert.equal(calls,phase==='search'?1:2);await runSearchCheck(f.storage,env,http);assert.equal(calls,phase==='search'?1:2);}});

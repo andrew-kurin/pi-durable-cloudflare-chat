@@ -9,7 +9,7 @@ import { ChatProjection } from './projector';
 import { guardModels } from './model-guard';
 import { delegation } from './delegate';
 import { readTools } from './read-tools';
-import {runSearchCheck,searchCheckStatus} from './search-check';
+import {runSearchCheck,searchCheckStatus,previousSearchCheckStatus,runGithubCheck,githubCheckStatus} from './search-check';
 import { createCredentialStore, startSubscriptionLogin, type SubscriptionLoginStatus } from './credentials';
 declare const PI_DEPLOYMENT_MODE: string;
 const deploymentMode = typeof PI_DEPLOYMENT_MODE === 'undefined' ? 'local' : PI_DEPLOYMENT_MODE;
@@ -32,11 +32,11 @@ export class Assistant extends DurableObject<Env> {
   const url=new URL(request.url);const path=url.pathname;const sid=url.searchParams.get('session')??'1';
   if(!/^\d{1,12}$/.test(sid))return Response.json({error:'Invalid session'},{status:400});
   try{
-   if(path==='/api/status'&&request.method==='GET')return Response.json({deploymentMode,modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId==='openai-codex'),login:this.loginStatus,webSearchEnabled:this.env.ENABLE_WEB_SEARCH==='true',searchKeyPresent:!!this.env.TAVILY_API_KEY,canCheckSearch:this.env.ENABLE_WEB_SEARCH_TEST==='true'&&this.env.ENABLE_WEB_SEARCH!=='true'&&!!this.env.TAVILY_API_KEY,searchCheck:await searchCheckStatus(this.ctx.storage)});
+   if(path==='/api/status'&&request.method==='GET')return Response.json({deploymentMode,modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId==='openai-codex'),login:this.loginStatus,webSearchEnabled:this.env.ENABLE_WEB_SEARCH==='true',searchKeyPresent:!!this.env.TAVILY_API_KEY,canCheckSearch:this.env.ENABLE_WEB_SEARCH_TEST==='true'&&this.env.ENABLE_WEB_SEARCH!=='true'&&!!this.env.TAVILY_API_KEY,searchCheck:await searchCheckStatus(this.ctx.storage),previousSearchCheck:await previousSearchCheckStatus(this.ctx.storage),githubCheck:await githubCheckStatus(this.ctx.storage)});
    if(path==='/api/search-check'&&request.method==='POST'){
     if(this.env.ENABLE_WEB_SEARCH_TEST!=='true'||this.env.ENABLE_WEB_SEARCH==='true'||!this.env.TAVILY_API_KEY)return Response.json({error:'Search check is not enabled'},{status:403});
     const body=await request.text();if(body!=='{"action":"run-approved-search-check"}')return Response.json({error:'Invalid search check'},{status:400});
-    return Response.json(await runSearchCheck(this.ctx.storage,this.env));
+    const search=await runSearchCheck(this.ctx.storage,this.env);const github=search.status==='passed'?await runGithubCheck(this.ctx.storage):await githubCheckStatus(this.ctx.storage);return Response.json({search,github});
    }
    if(path==='/api/login'&&request.method==='POST'){
     if(this.env.ENABLE_SUBSCRIPTION_LOGIN!=='true')return Response.json({error:'Subscription setup is not enabled'},{status:403});
