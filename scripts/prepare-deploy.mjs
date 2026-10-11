@@ -39,6 +39,9 @@ config.account_id = accountId;
 config.workers_dev = true;
 config.preview_urls = false;
 config.observability = { enabled: false };
+// A bundle change restarts live Durable Objects when feature bindings change.
+const mode = modelEnabled === 'true' ? 'chat' : loginEnabled === 'true' ? 'setup' : 'off';
+config.define = { ...(config.define || {}), PI_DEPLOYMENT_MODE: JSON.stringify(mode) };
 config.vars = {
   ACCESS_TEAM_DOMAIN: teamDomain,
   ACCESS_AUD: aud,

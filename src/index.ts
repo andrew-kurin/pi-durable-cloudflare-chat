@@ -9,6 +9,8 @@ import { ChatProjection } from './projector';
 import { guardModels } from './model-guard';
 import { delegation } from './delegate';
 import { createCredentialStore, startSubscriptionLogin, type SubscriptionLoginStatus } from './credentials';
+declare const PI_DEPLOYMENT_MODE: string;
+const deploymentMode = typeof PI_DEPLOYMENT_MODE === 'undefined' ? 'local' : PI_DEPLOYMENT_MODE;
 interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string }
 export class Assistant extends DurableObject<Env> {
  private credentials = createCredentialStore(this.ctx.storage,this.env.CREDENTIAL_ENCRYPTION_KEY);
@@ -28,7 +30,7 @@ export class Assistant extends DurableObject<Env> {
   const url=new URL(request.url);const path=url.pathname;const sid=url.searchParams.get('session')??'1';
   if(!/^\d{1,12}$/.test(sid))return Response.json({error:'Invalid session'},{status:400});
   try{
-   if(path==='/api/status'&&request.method==='GET')return Response.json({modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId==='openai-codex'),login:this.loginStatus});
+   if(path==='/api/status'&&request.method==='GET')return Response.json({deploymentMode,modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId==='openai-codex'),login:this.loginStatus});
    if(path==='/api/login'&&request.method==='POST'){
     if(this.env.ENABLE_SUBSCRIPTION_LOGIN!=='true')return Response.json({error:'Subscription setup is not enabled'},{status:403});
     if((await this.credentials.list()).some(x=>x.providerId==='openai-codex'))return Response.json({error:'Subscription is already connected.'},{status:409});

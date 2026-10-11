@@ -20,6 +20,7 @@ test('production modes default off and permit separately approved login or model
   const result=prepare(flags); assert.equal(result.status,0,result.error);
   assert.equal(result.config.vars.ENABLE_MODEL,flags.ENABLE_MODEL??'false');
   assert.equal(result.config.vars.ENABLE_SUBSCRIPTION_LOGIN,flags.ENABLE_SUBSCRIPTION_LOGIN??'false');
+  assert.equal(result.config.define.PI_DEPLOYMENT_MODE,JSON.stringify(flags.ENABLE_MODEL==='true'?'chat':flags.ENABLE_SUBSCRIPTION_LOGIN==='true'?'setup':'off'));
   assert.equal(result.mode,0o600); assert.equal(result.config.vars.CREDENTIAL_ENCRYPTION_KEY,undefined);
  }
 });
