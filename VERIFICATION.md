@@ -37,3 +37,7 @@ Before public source publication, Node.js 26.4.0 on macOS passed:
 - Wrangler 4.149.0 dry-run bundle: 1,263.30 KiB / 244.52 KiB gzip
 
 MIT license and root package/lockfile license metadata were applied. The source-only publication list was scanned for credentials and personal details; credential-like test values are synthetic. Model and subscription-login flags remain false. These checks do not verify UI visual rendering, live Cloudflare recovery, deployment, or live provider access. No new OAuth grant was requested.
+
+## Multiple owner addresses — 2026-10-11
+
+The app accepts a configured comma-separated OWNER_EMAILS exact allowlist, retaining OWNER_EMAIL singleton compatibility. Twenty offline tests pass, including both synthetic allowed addresses, outsider denial, malformed configuration denial, and real local workerd proof that two distinct signed identities see the same persisted session. Typecheck, synthetic deployment config validation and Wrangler dry-run passed. Personal addresses are absent from source. These checks do not establish live Cloudflare Access behavior or recovery.

@@ -31,7 +31,7 @@ Copy the application's AUD and your team's domain. In wrangler.jsonc, set:
 
 - ACCESS_TEAM_DOMAIN: https://YOUR-TEAM.cloudflareaccess.com
 - ACCESS_AUD: the application's audience tag
-- OWNER_EMAIL: your exact allowed email
+- OWNER_EMAILS: your exact allowed email
 - APP_ORIGIN: https://pi-private-chat.YOUR-SUBDOMAIN.workers.dev
 - workers_dev: true
 - Keep preview_urls false, ENABLE_MODEL false and ENABLE_SUBSCRIPTION_LOGIN false
@@ -72,7 +72,7 @@ Read README.md for architecture, limits and official links.
 
 ## GitHub Actions: checks and manual production deployment
 
-`.github/workflows/ci.yml` runs secret-free checks on main pushes and pull requests, including forks. It uses Node 24 LTS, `npm ci`, strict typecheck, all 18 offline tests, browser JavaScript syntax checking, and the Wrangler dry-run build. Actions are pinned to full commits; tooling comes from package-lock.json.
+`.github/workflows/ci.yml` runs secret-free checks on main pushes and pull requests, including forks. It uses Node 24 LTS, `npm ci`, strict typecheck, all 20 offline tests, browser JavaScript syntax checking, and the Wrangler dry-run build. Actions are pinned to full commits; tooling comes from package-lock.json.
 
 `.github/workflows/deploy.yml` runs only when manually dispatched on main. It checks the exact dispatch commit before requesting approval through the GitHub `production` environment, then deploys that same commit. Deployments are serialized; a new run does not cancel an active deployment. GitHub concurrency can replace an older pending run, so review the actual run SHA. The workflow token has only contents read access; no PR receives Cloudflare credentials, and checkout does not persist GitHub credentials.
 
@@ -83,7 +83,7 @@ Before any manual deployment:
 1. Confirm the intended Cloudflare account and current Workers plan, and inspect any existing `pi-private-chat` Worker before overwriting it. Confirm its exact workers.dev hostname. No paid upgrade is part of this pipeline.
 2. Create or verify an Access application for that exact hostname and an Allow policy restricted to the owner's exact email. New Access/security settings require separate approval. An OTP-method-only policy does not restrict access to the owner.
 3. In Cloudflare, create a dedicated API token with Account → Workers Scripts → Edit, restricted to the intended account. This gives account-level Workers authority, not single-Worker isolation. No KV, R2, D1, Pages, Zone or Access-management permission is needed for this initial workers.dev configuration. If Cloudflare reports another permission requirement, review it before expanding the token. Set an appropriate expiry and rotate/revoke through Cloudflare.
-4. Enter the token yourself directly into GitHub Settings → Environments → production → Environment secrets as `CLOUDFLARE_API_TOKEN`. Never send it in chat or commit it. Add `OWNER_EMAIL` as another environment secret to keep personal configuration out of public source.
+4. Enter the token yourself directly into GitHub Settings → Environments → production → Environment secrets as `CLOUDFLARE_API_TOKEN`. Never send it in chat or commit it. Add `OWNER_EMAILS` as another environment secret containing the comma-separated exact owner address list, to keep personal configuration out of public source.
 5. Add environment variables `CLOUDFLARE_ACCOUNT_ID` (32-character account ID), `ACCESS_TEAM_DOMAIN` (exact HTTPS team origin without trailing slash), `ACCESS_AUD` (Access application's 64-character audience), and `APP_ORIGIN` (exact `https://pi-private-chat.YOUR-SUBDOMAIN.workers.dev` origin without trailing slash). These values are used only in an ignored temporary configuration, removed after deployment. Do not upload that file or build artifacts containing it.
 6. Obtain approval for the actual deployment, choose Actions → Deploy production manually → Run workflow → main, and review the commit before approving the production job. This pipeline always forces model/login flags false, keeps previews and observability off, and enables workers.dev only for the configured origin. It does not create or modify Access policies. The configured hostname must match the actual Cloudflare hostname; verify after deployment.
 7. Verify unsigned access is denied and the owner-only Access policy works. Before needing credential-backed status/model functions, separately authorize and create the encryption secret directly in Cloudflare as described above. Never rotate an existing key accidentally. The deployment workflow does not create encryption secrets or import subscription credentials. Live subscription login, model enablement, UI visual QA and live recovery require separate work and approval.
@@ -96,3 +96,5 @@ Official references:
 - https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/
 - https://developers.cloudflare.com/fundamentals/api/reference/permissions/
 - https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments
+
+For multiple verified addresses belonging to the same owner, use the `OWNER_EMAILS` environment secret with a comma-separated exact list. The Access Allow policy must include exactly the same addresses. Both sign-ins share one workspace. The initial GitHub pipeline requires the plural secret; legacy manual deployments may still use `OWNER_EMAIL` for a singleton. No wildcard or whole-domain policy is permitted for this owner-only app.

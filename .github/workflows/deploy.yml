@@ -58,7 +58,7 @@ jobs:
           ACCESS_TEAM_DOMAIN: ${{ vars.ACCESS_TEAM_DOMAIN }}
           ACCESS_AUD: ${{ vars.ACCESS_AUD }}
           APP_ORIGIN: ${{ vars.APP_ORIGIN }}
-          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+          OWNER_EMAILS: ${{ secrets.OWNER_EMAILS }}
       - name: Deploy validated commit
         run: npx --no-install wrangler deploy --config .deploy.wrangler.json
         env:
