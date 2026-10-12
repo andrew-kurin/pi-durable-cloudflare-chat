@@ -51,6 +51,7 @@ test('workspace provisioning rejects ambiguous flags, foreign/tag-only images an
 test('staging is a fresh Worker target, forces provider calls off, and rejects production origins',()=>{
  const flags={...workspaceSettings,DEPLOY_TARGET:'staging',APP_ORIGIN:'https://pi-private-chat-workspace-staging.synthetic.workers.dev',ENABLE_WORKSPACE:'true',ENABLE_MODEL:'true',ENABLE_SUBSCRIPTION_LOGIN:'true',ENABLE_WEB_SEARCH:'true',ENABLE_WEB_SEARCH_TEST:'true'};
  const result=prepare(flags);assert.equal(result.status,0,result.error);assert.equal(result.config.name,'pi-private-chat-workspace-staging');
+ assert.equal(result.config.main,'src/workspace-smoke.ts');assert.equal(result.config.assets,undefined);assert.deepEqual(result.config.durable_objects.bindings,[{name:'Workspaces',class_name:'TaskWorkspace'}]);assert.deepEqual(result.config.migrations,[{tag:'workspace-smoke-v1',new_sqlite_classes:['TaskWorkspace']}]);
  for(const flag of ['ENABLE_MODEL','ENABLE_SUBSCRIPTION_LOGIN','ENABLE_WEB_SEARCH','ENABLE_WEB_SEARCH_TEST'])assert.equal(result.config.vars[flag],'false');
  assert.deepEqual(JSON.parse(result.config.vars.WORKSPACE_LIMITS),{taskMs:720000,commandMs:600000,idleMs:60000,warningMs:60000});assert.equal(result.config.vars.CREDENTIAL_ENCRYPTION_KEY,undefined);assert.equal(result.config.vars.TAVILY_API_KEY,undefined);assert.equal(result.config.routes,undefined);
  for(const options of [{DEPLOY_TARGET:'other'},{DEPLOY_TARGET:'staging'},{...flags,CUSTOM_DOMAIN:'pi-chat.example.com',APP_ORIGIN:'https://pi-chat.example.com'}])assert.notEqual(prepare(options).status,0);
@@ -60,4 +61,5 @@ test('manual workflow selects separate reviewed environments and passes workspac
  assert.match(workflow,/environment: \$\{\{ inputs.target \|\| 'production' \}\}/);assert.match(workflow,/DEPLOY_TARGET: \$\{\{ inputs.target \|\| 'production' \}\}/);
  for(const setting of ['PROVISION_WORKSPACE','ENABLE_WORKSPACE','WORKSPACE_REPOSITORY','WORKSPACE_IMAGE_REFERENCE'])assert.ok(workflow.includes(`${setting}: \${{ vars.${setting} }}`));
  assert.ok(!workflow.includes('containers push'));assert.ok(!workflow.includes('containers build'));
+ assert.ok(!workflow.includes('CREDENTIAL_ENCRYPTION_KEY'));assert.ok(!workflow.includes('secret list'));
 });

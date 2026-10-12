@@ -78,14 +78,6 @@ jobs:
           ENABLE_WORKSPACE: ${{ vars.ENABLE_WORKSPACE }}
           WORKSPACE_REPOSITORY: ${{ vars.WORKSPACE_REPOSITORY }}
           WORKSPACE_IMAGE_REFERENCE: ${{ vars.WORKSPACE_IMAGE_REFERENCE }}
-      - name: Require staging encryption secret (names only)
-        if: inputs.target == 'staging'
-        run: |
-          npx --no-install wrangler secret list --format json --config .deploy.wrangler.json > "$RUNNER_TEMP/pi-staging-secret-names.json"
-          node -e "const fs=require('node:fs'); const names=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pi-staging-secret-names.json','utf8')); if(!names.some(entry=>entry.name==='CREDENTIAL_ENCRYPTION_KEY')) throw Error('Missing staging-only encryption secret; owner must provision it directly without copying production');"
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy validated commit
         run: npx --no-install wrangler deploy --config .deploy.wrangler.json
         env:
@@ -93,4 +85,4 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       - name: Remove private deployment configuration
         if: always()
-        run: rm -f .deploy.wrangler.json "$RUNNER_TEMP/pi-staging-secret-names.json"
+        run: rm -f .deploy.wrangler.json

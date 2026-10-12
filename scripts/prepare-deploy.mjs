@@ -53,12 +53,19 @@ if (owners.length > 10 || owners.some(email => !/^[^\s@,*]+@[^\s@,*]+\.[^\s@,*]+
 const config = JSON.parse(await readFile(workspaceProvisioned === 'true' ? 'wrangler.workspace.jsonc' : 'wrangler.jsonc', 'utf8'));
 if (config.name !== 'pi-private-chat') throw new Error('Unexpected Worker name');
 config.name = workerName;
+if (target === 'staging') {
+  // Shell-only harness: never instantiate Assistant or copy provider/storage credentials.
+  config.main = 'src/workspace-smoke.ts';
+  delete config.assets;
+  config.durable_objects = { bindings: workspaceProvisioned === 'true' ? [{ name: 'Workspaces', class_name: 'TaskWorkspace' }] : [] };
+  config.migrations = workspaceProvisioned === 'true' ? [{ tag: 'workspace-smoke-v1', new_sqlite_classes: ['TaskWorkspace'] }] : [];
+}
 if (workspaceProvisioned === 'true') {
   if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repository) || repository.split('/').some(x => x === '.' || x === '..')) throw new Error('Workspace requires one trusted public owner/repository');
   const prefix = `registry.cloudflare.com/${accountId}/`;
   if (!image.startsWith(prefix) || !/^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*@sha256:[a-f0-9]{64}$/.test(image.slice(prefix.length))) throw new Error('Workspace requires an account-scoped digest-pinned Cloudflare registry image');
   const entry = config.containers?.find(entry => entry.class_name === 'TaskWorkspace');
-  if (!entry || entry.scheduling_policy !== 'durable_object' || !config.durable_objects?.bindings?.some(binding => binding.name === 'Workspaces' && binding.class_name === 'TaskWorkspace') || !config.migrations?.some(migration => migration.tag === 'workspace-v1' && migration.new_sqlite_classes?.includes('TaskWorkspace'))) throw new Error('Workspace template bindings/migration are missing');
+  if (!entry || entry.scheduling_policy !== 'durable_object' || !config.durable_objects?.bindings?.some(binding => binding.name === 'Workspaces' && binding.class_name === 'TaskWorkspace') || !config.migrations?.some(migration => migration.tag === (target === 'staging' ? 'workspace-smoke-v1' : 'workspace-v1') && migration.new_sqlite_classes?.includes('TaskWorkspace'))) throw new Error('Workspace template bindings/migration are missing');
   entry.images = { workspace: { image } };
 }
 config.account_id = accountId;
