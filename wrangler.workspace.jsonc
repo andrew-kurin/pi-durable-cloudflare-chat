@@ -1,0 +1,64 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pi-private-chat",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-11",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "Assistant",
+        "class_name": "Assistant"
+      },
+      {
+        "name": "Workspaces",
+        "class_name": "TaskWorkspace"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "Assistant"
+      ]
+    },
+    {
+      "tag": "workspace-v1",
+      "new_sqlite_classes": [
+        "TaskWorkspace"
+      ]
+    }
+  ],
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": "",
+    "OWNER_EMAILS": "",
+    "APP_ORIGIN": "",
+    "ENABLE_MODEL": "false",
+    "ENABLE_SUBSCRIPTION_LOGIN": "false",
+    "ENABLE_WEB_SEARCH": "false",
+    "ENABLE_WEB_SEARCH_TEST": "false",
+    "ENABLE_WORKSPACE": "false",
+    "WORKSPACE_REPOSITORY": "",
+    "WORKSPACE_IMAGE": ""
+  },
+  "observability": {
+    "enabled": false
+  },
+  "containers": [
+    {
+      "class_name": "TaskWorkspace",
+      "scheduling_policy": "durable_object"
+    }
+  ]
+}

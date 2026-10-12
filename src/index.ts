@@ -10,22 +10,29 @@ import { conversationTitle } from './conversation-title';
 import { guardModels } from './model-guard';
 import { delegation } from './delegate';
 import { readTools } from './read-tools';
+import {workspaceTools,type WorkspaceRequest,type WorkspaceToolRequest} from './workspace-tools';
+import {TaskWorkspace} from './workspace-container';
+export {TaskWorkspace};
 import {runSearchCheck,searchCheckStatus,previousSearchCheckStatus,runGithubCheck,githubCheckStatus} from './search-check';
 import { createCredentialStore, startSubscriptionLogin, type SubscriptionLoginStatus } from './credentials';
 declare const PI_DEPLOYMENT_MODE: string;
 const deploymentMode = typeof PI_DEPLOYMENT_MODE === 'undefined' ? 'local' : PI_DEPLOYMENT_MODE;
-interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string; TAVILY_API_KEY?:string; ENABLE_WEB_SEARCH?:string; ENABLE_WEB_SEARCH_TEST?:string }
+interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string; TAVILY_API_KEY?:string; ENABLE_WEB_SEARCH?:string; ENABLE_WEB_SEARCH_TEST?:string;ENABLE_WORKSPACE?:string;WORKSPACE_REPOSITORY?:string;WORKSPACE_IMAGE?:string;Workspaces?:DurableObjectNamespace<TaskWorkspace> }
 export class Assistant extends DurableObject<Env> {
+ private workspaceEnabled(){return this.env.ENABLE_WORKSPACE==='true'&&!!this.env.WORKSPACE_IMAGE&&!!this.env.Workspaces&&!!this.env.WORKSPACE_REPOSITORY&&/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(this.env.WORKSPACE_REPOSITORY)&&!this.env.WORKSPACE_REPOSITORY.split('/').some(x=>x==='.'||x==='..')}
+ private async workspaceRequest(session:string,input:WorkspaceToolRequest){if(!this.workspaceEnabled())throw Error('Workspace disabled');const id=input.workspaceId??await this.ctx.storage.get<string>('workspace-session:'+session);if(!id)throw Error('Ask the owner to open a workspace first');const request={...input,workspaceId:id} as WorkspaceRequest;const owner=await this.ctx.storage.get<string>('workspace-owner:'+request.workspaceId);if(owner!==session)throw Error('Workspace is not approved for this conversation');return this.env.Workspaces!.getByName(request.workspaceId).request(request)}
  private credentials = createCredentialStore(this.ctx.storage,this.env.CREDENTIAL_ENCRYPTION_KEY);
  private models = guardModels(createModels({credentials:this.credentials,authContext:{env:async()=>undefined,fileExists:async()=>false}}),async()=>{if(this.env.ENABLE_MODEL!=='true')throw new Error('Model disabled');await this.ctx.storage.transaction(async tx=>{const day=new Date().toISOString().slice(0,10);const count=await tx.get<{day:string,count:number}>('model-quota');const used=count?.day===day?count.count:0;if(used>=150)throw new Error('Daily model request limit');await tx.put('model-quota',{day,count:used+1});});});
  private loginStatus: SubscriptionLoginStatus = {status:'disabled'};
  private loginActive = false;
  private activeStreams = 0;
  private admission: Promise<unknown> = Promise.resolve();
- harness = new PiHarness({harness:({storage,context})=>{const registry=createRegistry();registry.install(delegation());registry.install(readTools(this.ctx.storage,this.env));const provider=createWorkerCodexProvider();this.models.setProvider(provider);return Harness.open(storage,{models:this.models,registry,settings:{compaction:{enabled:false},progress:{partialIntervalMs:250,outputIntervalMs:500},retry:{enabled:true,maxRetries:1,baseDelayMs:1000},stream:{transport:'sse',timeoutMs:120000,maxRetries:0}}},context);},defaults:{model:{provider:'openai-codex',id:'gpt-6-sol'},thinkingLevel:'low'}});
+ harness = new PiHarness({harness:({storage,context})=>{const registry=createRegistry();registry.install(delegation());if(this.workspaceEnabled())registry.install(workspaceTools({request:(session,r)=>this.workspaceRequest(session,r)}));registry.install(readTools(this.ctx.storage,this.env));const provider=createWorkerCodexProvider();this.models.setProvider(provider);return Harness.open(storage,{models:this.models,registry,settings:{compaction:{enabled:false},progress:{partialIntervalMs:250,outputIntervalMs:500},retry:{enabled:true,maxRetries:1,baseDelayMs:1000},stream:{transport:'sse',timeoutMs:120000,maxRetries:0}}},context);},defaults:{model:{provider:'openai-codex',id:'gpt-6-sol'},thinkingLevel:'low'}});
  lifecycle = Lifecycle.install(this).use(this.harness);
  async fetch(request:Request):Promise<Response>{
   try{await authorize(request,this.env);}catch{return new Response('Forbidden',{status:403});}
+  // Cancellation/extension must reach the workspace even while setup is awaiting I/O.
+  if(request.method==='POST'&&/^\/api\/workspaces\/[a-f0-9-]{36}(?:\/extend)?$/.test(new URL(request.url).pathname))return this.handle(request);
   if(request.method==='POST'){const work=this.admission.then(()=>this.handle(request));this.admission=work.then(()=>undefined,()=>undefined);return work;}
   return this.handle(request);
  }
@@ -33,7 +40,33 @@ export class Assistant extends DurableObject<Env> {
   const url=new URL(request.url);const path=url.pathname;const sid=url.searchParams.get('session')??'1';
   if(!/^\d{1,12}$/.test(sid))return Response.json({error:'Invalid session'},{status:400});
   try{
-   if(path==='/api/status'&&request.method==='GET')return Response.json({deploymentMode,modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId==='openai-codex'),login:this.loginStatus,webSearchEnabled:this.env.ENABLE_WEB_SEARCH==='true',searchKeyPresent:!!this.env.TAVILY_API_KEY,canCheckSearch:this.env.ENABLE_WEB_SEARCH_TEST==='true'&&this.env.ENABLE_WEB_SEARCH!=='true'&&!!this.env.TAVILY_API_KEY,searchCheck:await searchCheckStatus(this.ctx.storage),previousSearchCheck:await previousSearchCheckStatus(this.ctx.storage),githubCheck:await githubCheckStatus(this.ctx.storage)});
+   if(path==='/api/status'&&request.method==='GET')return Response.json({deploymentMode,modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId==='openai-codex'),login:this.loginStatus,webSearchEnabled:this.env.ENABLE_WEB_SEARCH==='true',searchKeyPresent:!!this.env.TAVILY_API_KEY,canCheckSearch:this.env.ENABLE_WEB_SEARCH_TEST==='true'&&this.env.ENABLE_WEB_SEARCH!=='true'&&!!this.env.TAVILY_API_KEY,searchCheck:await searchCheckStatus(this.ctx.storage),previousSearchCheck:await previousSearchCheckStatus(this.ctx.storage),githubCheck:await githubCheckStatus(this.ctx.storage),workspaceEnabled:this.workspaceEnabled(),workspaceRepository:this.workspaceEnabled()?this.env.WORKSPACE_REPOSITORY:undefined});
+   if(path==='/api/workspaces'&&request.method==='GET'){
+    if(!this.workspaceEnabled())return Response.json({error:'Workspace disabled'},{status:403});
+    return Response.json({workspaceId:await this.ctx.storage.get<string>('workspace-session:'+sid)});
+   }
+   if(path==='/api/workspaces'&&request.method==='POST'){
+    if(!this.workspaceEnabled())return Response.json({error:'Workspace disabled'},{status:403});
+    const raw=await request.text();if(raw.length>1000)return Response.json({error:'Invalid workspace request'},{status:400});const b=JSON.parse(raw);
+    if(typeof b.workspaceId!=='string'||! /^[a-f0-9-]{36}$/.test(b.workspaceId))return Response.json({error:'Invalid workspace ID'},{status:400});
+    const old=await this.ctx.storage.get<string>('workspace-session:'+sid);if(old&&old!==b.workspaceId){const state=await this.workspaceRequest(sid,{workspaceId:old,action:'status',operationId:'0'.repeat(64)}) as {phase:string};if(state.phase!=='closed')return Response.json({error:'Cancel the active workspace before opening another'},{status:409});}
+    if(!(await this.harness.sessions.list()).some(s=>s.id===sid&&!s.parent))return Response.json({error:'Conversation not found'},{status:404});
+    const owner=await this.ctx.storage.get<string>('workspace-owner:'+b.workspaceId);if(owner&&owner!==sid)return Response.json({error:'Workspace identity conflict'},{status:409});
+    const active=await this.ctx.storage.get<string>('workspace-active');if(active&&active!==b.workspaceId){const state=await this.env.Workspaces!.getByName(active).request({workspaceId:active,action:'status',operationId:'0'.repeat(64)}) as {phase:string};if(state.phase!=='closed')return Response.json({error:'Cancel the active workspace before opening another task'},{status:409});}
+    await this.ctx.storage.put('workspace-active',b.workspaceId);await this.ctx.storage.put('workspace-owner:'+b.workspaceId,sid);await this.ctx.storage.put('workspace-session:'+sid,b.workspaceId);
+    return Response.json(await this.env.Workspaces!.getByName(b.workspaceId).open(b.workspaceId,sid,this.env.WORKSPACE_REPOSITORY!));
+   }
+   const workspaceRoute=/^\/api\/workspaces\/([a-f0-9-]{36})(?:\/(artifact|extend))?$/.exec(path);
+   if(workspaceRoute){
+    if(!this.workspaceEnabled())return Response.json({error:'Workspace disabled'},{status:403});const [,id,operation]=workspaceRoute;
+    if(await this.ctx.storage.get<string>('workspace-owner:'+id)!==sid)return Response.json({error:'Workspace not found'},{status:404});
+    const stub=this.env.Workspaces!.getByName(id);
+    if(operation==='artifact'&&request.method==='GET')return Response.json(await stub.artifact(url.searchParams.get('export')??undefined),{headers:{'Content-Disposition':`attachment; filename="workspace-${id}.json"`}});
+    if(operation==='extend'&&request.method==='POST'){const raw=await request.text();if(raw.length>1000)return Response.json({error:'Invalid extension'},{status:400});const b=JSON.parse(raw);if(!['task','command'].includes(b.target))return Response.json({error:'Invalid extension target'},{status:400});return Response.json(await stub.extend(b.target,b.minutes));}
+    if(!operation&&request.method==='GET')return Response.json(await stub.request({workspaceId:id,action:'status',operationId:'0'.repeat(64)}));
+    if(!operation&&request.method==='POST'){const raw=await request.text();if(raw.length>1000)return Response.json({error:'Invalid owner action'},{status:400});const b=JSON.parse(raw);if(!['cancel','export'].includes(b.action))return Response.json({error:'Use typed model tools for workspace files and commands'},{status:400});return Response.json(await stub.request({workspaceId:id,action:b.action,operationId:b.operationId}));}
+    return Response.json({error:'Method not allowed'},{status:405});
+   }
    if(path==='/api/search-check'&&request.method==='POST'){
     if(this.env.ENABLE_WEB_SEARCH_TEST!=='true'||this.env.ENABLE_WEB_SEARCH==='true'||!this.env.TAVILY_API_KEY)return Response.json({error:'Search check is not enabled'},{status:403});
     const body=await request.text();if(body!=='{"action":"run-approved-search-check"}')return Response.json({error:'Invalid search check'},{status:400});
