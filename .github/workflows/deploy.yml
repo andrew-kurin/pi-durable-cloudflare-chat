@@ -2,12 +2,20 @@ name: Deploy production manually
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'Reviewed deployment target (staging requires its own protected environment)'
+        type: choice
+        default: production
+        options:
+          - production
+          - staging
 
 permissions:
   contents: read
 
 concurrency:
-  group: production-deployment
+  group: deployment-${{ inputs.target || 'production' }}
   cancel-in-progress: false
 
 jobs:
@@ -37,7 +45,7 @@ jobs:
   deploy:
     needs: validate
     if: github.ref == 'refs/heads/main'
-    environment: production
+    environment: ${{ inputs.target || 'production' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -54,6 +62,7 @@ jobs:
       - name: Prepare private deployment configuration
         run: node scripts/prepare-deploy.mjs
         env:
+          DEPLOY_TARGET: ${{ inputs.target || 'production' }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           ACCESS_TEAM_DOMAIN: ${{ vars.ACCESS_TEAM_DOMAIN }}
           ACCESS_AUD: ${{ vars.ACCESS_AUD }}
@@ -65,6 +74,10 @@ jobs:
           ENABLE_SUBSCRIPTION_LOGIN: ${{ vars.ENABLE_SUBSCRIPTION_LOGIN }}
           ENABLE_WEB_SEARCH: ${{ vars.ENABLE_WEB_SEARCH }}
           ENABLE_WEB_SEARCH_TEST: ${{ vars.ENABLE_WEB_SEARCH_TEST }}
+          PROVISION_WORKSPACE: ${{ vars.PROVISION_WORKSPACE }}
+          ENABLE_WORKSPACE: ${{ vars.ENABLE_WORKSPACE }}
+          WORKSPACE_REPOSITORY: ${{ vars.WORKSPACE_REPOSITORY }}
+          WORKSPACE_IMAGE_REFERENCE: ${{ vars.WORKSPACE_IMAGE_REFERENCE }}
       - name: Deploy validated commit
         run: npx --no-install wrangler deploy --config .deploy.wrangler.json
         env:
