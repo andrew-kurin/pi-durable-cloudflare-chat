@@ -5,6 +5,9 @@ import {spawn,execFileSync} from 'node:child_process';
 import {Readable,Writable} from 'node:stream';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {ContainerWorkspaceAdapter} from '../src/workspace-adapter.ts';
 const image='pi-workspace-smoke:local',name='pi-smoke-'+randomUUID();
 let dockerOptions=[];
@@ -17,7 +20,9 @@ if(!/^(unix|npipe):\/\//.test(endpoint)){console.error('BLOCKED: smoke runner re
 dockerOptions=['--host',endpoint];
 dockerEnv={...process.env};delete dockerEnv.DOCKER_CONTEXT;delete dockerEnv.DOCKER_HOST;
 try{cli(['version','--format','{{.Server.Version}}'])}catch{console.error('BLOCKED: installed Docker cannot reach its daemon. Start/authorize Docker separately; this script does not start software or change permissions.');process.exit(2)}
-cli(['build','--tag',image,'--file','workspace/Dockerfile','workspace'],{timeout:10*60000,stdio:'inherit'});
+// Public base images need no stored account credentials or credential-helper prompt.
+const buildConfig=mkdtempSync(join(tmpdir(),'pi-docker-anonymous-'));
+try{cli(['build','--tag',image,'--file','workspace/Dockerfile','workspace'],{timeout:10*60000,stdio:'inherit',env:{...dockerEnv,DOCKER_CONFIG:buildConfig}})}finally{rmSync(buildConfig,{recursive:true,force:true})}
 let running=false;const container={
  get running(){return running},images:{},
  start(){cli(['run','--detach','--name',name,'--network','none','--memory','512m','--cpus','1',image]);running=true},
@@ -49,6 +54,7 @@ try{
  const cancelled='b'.repeat(64);await adapter.dispatch(cancelled,['sh','-c','sleep 120 & wait'],'.',signal);
  await wait(async()=> (await adapter.status(cancelled,signal)).state==='running');await adapter.terminate(cancelled,signal);
  await wait(async()=> (await adapter.status(cancelled,signal)).state!=='running');
+ cli(['exec',name,'python3','-c',"import glob\nfor p in glob.glob('/proc/[0-9]*/cmdline'):\n try:\n  with open(p,'rb') as f: assert f.read()!=b'sleep\\x00120\\x00', 'Cancellation must stop the child process too'\n except FileNotFoundError: pass"]);
  await adapter.stop();assert.equal(running,false);
  const containers=cli(['ps','--all','--filter','name=^/'+name+'$','--format','{{.Names}}']).trim();assert.equal(containers,'');
  console.log('PASS real local Docker: image build, file/edit, serial process status/logs, base-relative new-file patch, process-group cancel and guest cleanup. Cloudflare APIs/lifecycle remain untested.');
