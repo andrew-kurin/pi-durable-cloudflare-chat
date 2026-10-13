@@ -10,5 +10,5 @@
  "durable_objects":{"bindings":[{"name":"Assistant","class_name":"Assistant"}]},
  "migrations":[{"tag":"v1","new_sqlite_classes":["Assistant"]}],
  "vars":{"ACCESS_TEAM_DOMAIN":"","ACCESS_AUD":"","OWNER_EMAILS":"","APP_ORIGIN":"","ENABLE_MODEL":"false","ENABLE_SUBSCRIPTION_LOGIN":"false","ENABLE_WEB_SEARCH":"false","ENABLE_WEB_SEARCH_TEST":"false"},
- "observability":{"enabled":false}
+ "observability":{"logs":{"enabled":true,"head_sampling_rate":1,"invocation_logs":true,"persist":true},"traces":{"enabled":false,"head_sampling_rate":1,"persist":true},"issues":{"enabled":false}}
 }

@@ -33,7 +33,7 @@ export function technicalError(error:unknown){
  return {message:redactErrorText(raw),...(status?{status}:{}),...(code?{code}:{}),...(typeof e?.stack==='string'?{stack:redactErrorText(e.stack,2400)}:{})};
 }
 export function logTechnicalError(stage:'model_dispatch'|'request'|'saved_model_response',error:unknown,correlation:string,extra:Record<string,string|number|boolean>={},emit:(record:unknown)=>void=record=>console.warn(JSON.stringify(record))){
- try{const source=stage==='request'&&(error instanceof SyntaxError||(error as any)?.name==='SyntaxError')?new Error('Request parsing failed; raw input omitted.'):error;emit({event:'pi_error',stage,correlation,...technicalError(source),...extra});}catch{/* Diagnostics must not change chat or stream behavior. */}
+ try{const source=stage==='request'&&(error instanceof SyntaxError||(error as any)?.name==='SyntaxError')?new Error('Request parsing failed; raw input omitted.'):error;emit({event:'pi_error',stage,correlation,...technicalError(source),...extra});return true;}catch{/* Diagnostics must not change chat or stream behavior. */return false;}
 }
 interface ErrorLogTx{get<T>(key:string):Promise<T|undefined>;put<T>(key:string,value:T):Promise<void>}
 export interface ErrorLogStore extends ErrorLogTx{transaction<T>(fn:(tx:ErrorLogTx)=>Promise<T>):Promise<T>}
@@ -41,7 +41,11 @@ export async function logSavedFailure(entries:readonly EntryRecord[],store:Error
  const entry=[...entries].reverse().find(e=>e.kind==='pi.assistant'&&e.model?.some(m=>m.role==='assistant'&&m.stopReason==='error'));if(!entry)return false;
  const message=entry.model?.filter(m=>m.role==='assistant').find(m=>m.stopReason==='error');if(!message)return false;
  const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(session+':'+String(entry.id)+':'+capture));const correlation=Array.from(new Uint8Array(bytes)).map(x=>x.toString(16).padStart(2,'0')).join('').slice(0,24);
- const key='diagnostic:saved-error:'+session;let claimed;try{claimed=await store.transaction(async tx=>{const seen=await tx.get<string[]>(key)??[];if(seen.includes(correlation))return false;await tx.put(key,[...seen,correlation].slice(-32));return true});}catch{return false}if(!claimed)return false;
+ const key='diagnostic:saved-error:'+session;
  const raw=message.errorMessage;
- logTechnicalError('saved_model_response',typeof raw==='string'?raw:undefined,correlation,{errorMessagePresent:raw!==undefined,errorMessageType:typeof raw,errorMessageLength:typeof raw==='string'?raw.length:0,...(Number.isSafeInteger(message.timestamp)?{messageTimestamp:message.timestamp}:{})},emit);return true;
+ return await store.transaction(async tx=>{const seen=await tx.get<string[]>(key)??[];if(seen.includes(correlation))return false;
+  // Only acknowledge a capture after emission succeeds; keep concurrent reads serialized.
+  if(!logTechnicalError('saved_model_response',typeof raw==='string'?raw:undefined,correlation,{errorMessagePresent:raw!==undefined,errorMessageType:typeof raw,errorMessageLength:typeof raw==='string'?raw.length:0,...(Number.isSafeInteger(message.timestamp)?{messageTimestamp:message.timestamp}:{})},emit))return false;
+  await tx.put(key,[...seen,correlation].slice(-32));return true;
+ });
 }catch{return false}}
