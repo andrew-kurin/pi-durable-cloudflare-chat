@@ -7,7 +7,8 @@ interface SmokeEnv extends AccessConfig {
  Workspaces?:DurableObjectNamespace<TaskWorkspace>;
  ENABLE_WORKSPACE?:string;ENABLE_WORKSPACE_SMOKE?:string;WORKSPACE_IMAGE?:string;WORKSPACE_REPOSITORY?:string;
 }
-const ID='00000000-0000-4000-8000-000000000001',SESSION='native-shell-smoke-v1';
+// One newly authorized retry; the old v1 Durable Object stays closed and untouched.
+const ID='00000000-0000-4000-8000-000000000002',SESSION='native-shell-smoke-v2';
 const FILE='.pi-cloudflare-native-smoke.txt';
 const steps={
  create:{action:'edit',path:FILE,oldText:'',newText:'native staging fixture\n'},
