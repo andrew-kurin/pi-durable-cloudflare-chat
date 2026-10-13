@@ -99,7 +99,7 @@ jobs:
           WORKSPACE_REPOSITORY: ${{ vars.WORKSPACE_REPOSITORY }}
           WORKSPACE_IMAGE_REFERENCE: ${{ env.WORKSPACE_IMAGE_REFERENCE || vars.WORKSPACE_IMAGE_REFERENCE }}
       - name: Deploy validated commit
-        run: npx --no-install wrangler deploy --config .deploy.wrangler.json
+        run: npx --no-install wrangler deploy --config .deploy.wrangler.json --durable-objects-code-update-mode immediate
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
