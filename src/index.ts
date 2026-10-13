@@ -128,6 +128,13 @@ export class Assistant extends DurableObject<Env> {
     await this.streamStops.get(id)?.();return Response.json({closed:true});
    }
    if(path==='/api/events'&&request.method==='GET'){
+    if(url.searchParams.get('snapshot')==='1'){
+     const events=await this.harness.session(sid).events();try{const projection=new ChatProjection();projection.apply(events.snapshot);
+      const diagnostic=url.searchParams.get('diagnostic')==='saved-error'?await diagnoseSavedErrorRead(url,events.snapshot.entries,this.ctx.storage,sid):undefined;
+      const title=await this.ctx.storage.get<string>(`chat-title:${sid}`)??await this.ctx.storage.get<string>(`chat-auto-title:${sid}`)??conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text);
+      return Response.json({...projection.view(),historyProtocol:2,...(diagnostic?{diagnostic}:{}),title},{headers:{'Cache-Control':'no-store'}});
+     }finally{await events.stop();}
+    }
     const id=url.searchParams.get('stream');if(id!==null&&!/^[a-f0-9-]{36}$/.test(id))return Response.json({error:'Invalid stream'},{status:400});
     for(const [key,deadline] of this.closedStreams)if(deadline<=Date.now())this.closedStreams.delete(key);
     if(id&&this.closedStreams.has(id))return new Response(null,{status:204});
@@ -146,7 +153,7 @@ export class Assistant extends DurableObject<Env> {
      if(ended)return new Response(null,{status:204});
      const encoder=new TextEncoder();const source=events;
      const body=new ReadableStream<Uint8Array>({start:c=>{controller=c;
-      const send=()=>{if(!ended)controller!.enqueue(encoder.encode(`data: ${JSON.stringify({...projection.view(),...(diagnostic?{diagnostic}:{}),title:title||conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text)})}\n\n`));};send();
+      const send=()=>{if(!ended)controller!.enqueue(encoder.encode(`data: ${JSON.stringify({...projection.view(),historyProtocol:2,...(diagnostic?{diagnostic}:{}),title:title||conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text)})}\n\n`));};send();
       source.start(async batch=>{batch.forEach(e=>projection.apply(e));const entries=batch.flatMap(e=>e.type==='message_end'||e.type==='entry_appended'?[e.entry]:[]);if(entries.length)await logSavedFailure(entries,this.ctx.storage,sid,'live-v1');send();});
       timer=setTimeout(()=>{void stop();},55000);request.signal.addEventListener('abort',onAbort,{once:true});if(request.signal.aborted)void stop();
      },cancel:()=>stop()});
