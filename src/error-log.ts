@@ -37,15 +37,24 @@ export function logTechnicalError(stage:'model_dispatch'|'request'|'saved_model_
 }
 interface ErrorLogTx{get<T>(key:string):Promise<T|undefined>;put<T>(key:string,value:T):Promise<void>}
 export interface ErrorLogStore extends ErrorLogTx{transaction<T>(fn:(tx:ErrorLogTx)=>Promise<T>):Promise<T>}
-export async function logSavedFailure(entries:readonly EntryRecord[],store:ErrorLogStore,session:string,capture:string,emit?:(record:unknown)=>void){try{
- const entry=[...entries].reverse().find(e=>e.kind==='pi.assistant'&&e.model?.some(m=>m.role==='assistant'&&m.stopReason==='error'));if(!entry)return false;
- const message=entry.model?.filter(m=>m.role==='assistant').find(m=>m.stopReason==='error');if(!message)return false;
- const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(session+':'+String(entry.id)+':'+capture));const correlation=Array.from(new Uint8Array(bytes)).map(x=>x.toString(16).padStart(2,'0')).join('').slice(0,24);
- const key='diagnostic:saved-error:'+session;
- const raw=message.errorMessage;
- return await store.transaction(async tx=>{const seen=await tx.get<string[]>(key)??[];if(seen.includes(correlation))return false;
-  // Only acknowledge a capture after emission succeeds; keep concurrent reads serialized.
-  if(!logTechnicalError('saved_model_response',typeof raw==='string'?raw:undefined,correlation,{errorMessagePresent:raw!==undefined,errorMessageType:typeof raw,errorMessageLength:typeof raw==='string'?raw.length:0,...(Number.isSafeInteger(message.timestamp)?{messageTimestamp:message.timestamp}:{})},emit))return false;
-  await tx.put(key,[...seen,correlation].slice(-32));return true;
- });
-}catch{return false}}
+export type SavedFailureOutcome='emitted'|'deduplicated'|'no_saved_error'|'storage_failed'|'emission_failed'|'correlation_failed'|'inspection_failed';
+export interface SavedFailureDiagnostic {outcome:SavedFailureOutcome;emissionAccepted:boolean;correlation?:string;errorMessagePresent?:boolean;errorMessageType?:string;errorMessageLength?:number}
+/** Fixed branch outcomes only; never return saved text, entry IDs, prompts or tool data. */
+export async function diagnoseSavedFailure(entries:readonly EntryRecord[],store:ErrorLogStore,session:string,capture:string,emit?:(record:unknown)=>void):Promise<SavedFailureDiagnostic>{
+ let message:Extract<NonNullable<EntryRecord['model']>[number],{role:'assistant'}>|undefined,entry:EntryRecord|undefined;
+ try{entry=[...entries].reverse().find(e=>e.kind==='pi.assistant'&&e.model?.some(m=>m.role==='assistant'&&m.stopReason==='error'));if(!entry)return {outcome:'no_saved_error',emissionAccepted:false};message=entry.model?.filter(m=>m.role==='assistant').find(m=>m.stopReason==='error');if(!message)return {outcome:'no_saved_error',emissionAccepted:false};}catch{return {outcome:'inspection_failed',emissionAccepted:false}}
+ let correlation:string;
+ try{const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(session+':'+String(entry.id)+':'+capture));correlation=Array.from(new Uint8Array(bytes)).map(x=>x.toString(16).padStart(2,'0')).join('').slice(0,24);}catch{return {outcome:'correlation_failed',emissionAccepted:false}}
+ let raw:unknown,timestamp:unknown;try{raw=message.errorMessage;timestamp=message.timestamp;}catch{return {outcome:'inspection_failed',emissionAccepted:false,correlation}}const metadata={correlation,errorMessagePresent:raw!==undefined,errorMessageType:typeof raw,errorMessageLength:typeof raw==='string'?raw.length:0};let emissionAccepted=false;
+ try{return await store.transaction(async tx=>{const key='diagnostic:saved-error:'+session;const seen=await tx.get<string[]>(key)??[];if(seen.includes(correlation))return {outcome:'deduplicated',emissionAccepted:false,...metadata};
+  emissionAccepted=logTechnicalError('saved_model_response',typeof raw==='string'?raw:undefined,correlation,{errorMessagePresent:metadata.errorMessagePresent,errorMessageType:metadata.errorMessageType,errorMessageLength:metadata.errorMessageLength,...(typeof timestamp==='number'&&Number.isSafeInteger(timestamp)?{messageTimestamp:timestamp}:{})},emit);
+  if(!emissionAccepted)return {outcome:'emission_failed',emissionAccepted:false,...metadata};
+  await tx.put(key,[...seen,correlation].slice(-32));return {outcome:'emitted',emissionAccepted:true,...metadata};
+ });}catch{return {outcome:'storage_failed',emissionAccepted,...metadata}}
+}
+export async function logSavedFailure(entries:readonly EntryRecord[],store:ErrorLogStore,session:string,capture:string,emit?:(record:unknown)=>void){return (await diagnoseSavedFailure(entries,store,session,capture,emit)).outcome==='emitted';}
+export async function diagnoseSavedErrorRead(url:URL,entries:readonly EntryRecord[],store:ErrorLogStore,session:string,emit?:(record:unknown)=>void){
+ const captures=url.searchParams.getAll('capture');const capture=captures[0];const gate={capturePresent:captures.length>0,captureCount:captures.length,captureLength:capture?.length??0,captureShapeValid:typeof capture==='string'&&/^[a-f0-9-]{36}$/.test(capture)};
+ const result=captures.length!==1||!gate.captureShapeValid?{outcome:'invalid_capture' as const,emissionAccepted:false}:await diagnoseSavedFailure(entries,store,session,capture!,emit);
+ const diagnostic={...result,...gate,session,snapshotEntryCount:entries.length};try{console.info(JSON.stringify({event:'pi_diagnostic',stage:'saved_error_read',...diagnostic}));}catch{/* The owner-only SSE acknowledgement remains available if console logging fails. */}return diagnostic;
+}

@@ -1,4 +1,4 @@
-import {logSavedFailure,logTechnicalError} from './error-log';
+import {logSavedFailure,logTechnicalError,diagnoseSavedErrorRead} from './error-log';
 import { DurableObject } from 'cloudflare:workers';
 import { PiHarness } from 'agents/harness/pi';
 import { Lifecycle } from 'agents/lifecycle';
@@ -122,17 +122,17 @@ export class Assistant extends DurableObject<Env> {
    if(path==='/api/events'&&request.method==='GET'){
     if(this.activeStreams>=3)return Response.json({error:'Too many open chats'},{status:429});
     this.activeStreams++;let events;try{events=await this.harness.session(sid).events();}catch(error){this.activeStreams--;throw error;}const projection=new ChatProjection();projection.apply(events.snapshot);
-    const capture=url.searchParams.get('capture');if(url.searchParams.get('diagnostic')==='saved-error'&&capture&&/^[a-f0-9-]{36}$/.test(capture))await logSavedFailure(events.snapshot.entries,this.ctx.storage,sid,capture);
+    const diagnostic=url.searchParams.get('diagnostic')==='saved-error'?await diagnoseSavedErrorRead(url,events.snapshot.entries,this.ctx.storage,sid):undefined;
     const customTitle=await this.ctx.storage.get<string>(`chat-title:${sid}`);const autoTitle=await this.ctx.storage.get<string>(`chat-auto-title:${sid}`);const title=customTitle??autoTitle??conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text);
     const encoder=new TextEncoder();let ended=false;let timer:ReturnType<typeof setTimeout>;
     const stop=async()=>{if(ended)return;ended=true;clearTimeout(timer);this.activeStreams--;await events.stop();};
     const body=new ReadableStream<Uint8Array>({start:controller=>{
-     const send=()=>{if(!ended)controller.enqueue(encoder.encode(`data: ${JSON.stringify({...projection.view(),title:title||conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text)})}\n\n`));};send();
+     const send=()=>{if(!ended)controller.enqueue(encoder.encode(`data: ${JSON.stringify({...projection.view(),...(diagnostic?{diagnostic}:{}),title:title||conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text)})}\n\n`));};send();
      events.start(async batch=>{batch.forEach(e=>projection.apply(e));const entries=batch.flatMap(e=>e.type==='message_end'||e.type==='entry_appended'?[e.entry]:[]);if(entries.length)await logSavedFailure(entries,this.ctx.storage,sid,'live-v1');send();});
      timer=setTimeout(()=>{if(!ended){controller.close();void stop();}},55000);
      request.signal.addEventListener('abort',()=>{void stop();},{once:true});
     },cancel:()=>stop()});
-    return new Response(body,{headers:{'Content-Type':'text/event-stream','Cache-Control':'no-store'}});
+    return new Response(body,{headers:{'Content-Type':'text/event-stream','Cache-Control':'no-store',...(diagnostic?{'X-Pi-Diagnostic-Outcome':diagnostic.outcome}:{})}});
    }
    return Response.json({error:'Not found'},{status:404});
   }catch(error){logTechnicalError('request',error,crypto.randomUUID());return Response.json({error:'Request unavailable. Your saved chat is unchanged.'},{status:500});}
