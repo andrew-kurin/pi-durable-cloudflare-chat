@@ -20,6 +20,9 @@ const webSearchEnabled = target === 'staging' ? 'false' : flag('ENABLE_WEB_SEARC
 const webSearchTest = target === 'staging' ? 'false' : flag('ENABLE_WEB_SEARCH_TEST');
 const workspaceProvisioned = flag('PROVISION_WORKSPACE');
 const workspaceEnabled = flag('ENABLE_WORKSPACE');
+const workspaceSmoke = target === 'staging' ? workspaceEnabled : flag('ENABLE_WORKSPACE_SMOKE');
+if (workspaceSmoke === 'true' && workspaceEnabled === 'true' && target === 'production') throw new Error('Disable ordinary workspace tools during the native smoke');
+if (workspaceSmoke === 'true' && workspaceProvisioned !== 'true') throw new Error('Workspace smoke requires explicit provisioning');
 if (workspaceEnabled === 'true' && workspaceProvisioned !== 'true') throw new Error('Workspace activation requires explicit provisioning');
 const repository = process.env.WORKSPACE_REPOSITORY?.trim() || '';
 const image = process.env.WORKSPACE_IMAGE_REFERENCE?.trim() || '';
@@ -78,7 +81,7 @@ config.observability = { enabled: false };
 // A bundle change restarts live Durable Objects when feature bindings change.
 const mode = modelEnabled === 'true' ? 'chat' : loginEnabled === 'true' ? 'setup' : 'off';
 config.define = { ...(config.define || {}), PI_DEPLOYMENT_MODE: JSON.stringify(`${mode}:web-${webSearchEnabled}:test-${webSearchTest}:origin-${app.hostname}`) };
-if (workspaceProvisioned === 'true') config.define.PI_DEPLOYMENT_MODE = JSON.stringify(`${mode}:web-${webSearchEnabled}:test-${webSearchTest}:origin-${app.hostname}:workspace-${workspaceEnabled}:${image}:${repository}`);
+if (workspaceProvisioned === 'true') config.define.PI_DEPLOYMENT_MODE = JSON.stringify(`${mode}:web-${webSearchEnabled}:test-${webSearchTest}:origin-${app.hostname}:workspace-${workspaceEnabled}:smoke-${workspaceSmoke}:${image}:${repository}`);
 config.vars = {
   ACCESS_TEAM_DOMAIN: teamDomain,
   ACCESS_AUD: aud,
@@ -89,9 +92,10 @@ config.vars = {
   ENABLE_WEB_SEARCH: webSearchEnabled,
   ENABLE_WEB_SEARCH_TEST: webSearchTest,
   ENABLE_WORKSPACE: workspaceEnabled,
+  ENABLE_WORKSPACE_SMOKE: workspaceSmoke,
 };
 if (workspaceProvisioned === 'true') Object.assign(config.vars, { WORKSPACE_REPOSITORY: repository, WORKSPACE_IMAGE: 'workspace' });
 // Leave cancellation/export margin within the separately approved 15-minute smoke window.
-if (target === 'staging') config.vars.WORKSPACE_LIMITS = JSON.stringify({ taskMs: 12 * 60000, commandMs: 10 * 60000, idleMs: 60000, warningMs: 60000 });
+if (workspaceSmoke === 'true') config.vars.WORKSPACE_LIMITS = JSON.stringify({ taskMs: 12 * 60000, commandMs: 10 * 60000, idleMs: 60000, warningMs: 60000 });
 await writeFile('.deploy.wrangler.json', JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
 console.log(`Prepared ${target} configuration: model=${modelEnabled}, subscriptionLogin=${loginEnabled}, workspaceProvisioned=${workspaceProvisioned}, workspaceEnabled=${workspaceEnabled}.`);
