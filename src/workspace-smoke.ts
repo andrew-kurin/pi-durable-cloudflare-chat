@@ -5,7 +5,7 @@ import type {WorkspaceRequest,WorkspaceAction} from './workspace-tools';
 export {TaskWorkspace};
 interface SmokeEnv extends AccessConfig {
  Workspaces?:DurableObjectNamespace<TaskWorkspace>;
- ENABLE_WORKSPACE?:string;WORKSPACE_IMAGE?:string;WORKSPACE_REPOSITORY?:string;
+ ENABLE_WORKSPACE?:string;ENABLE_WORKSPACE_SMOKE?:string;WORKSPACE_IMAGE?:string;WORKSPACE_REPOSITORY?:string;
 }
 const ID='00000000-0000-4000-8000-000000000001',SESSION='native-shell-smoke-v1';
 const FILE='.pi-cloudflare-native-smoke.txt';
@@ -35,7 +35,8 @@ document.querySelector('#run').onclick=async()=>{
   const logs=await get('/api/smoke/logs');if(!logs.stdout.text.includes('PASS native shell smoke')||!logs.stderr.text.includes('stderr captured'))throw Error('Log verification failed');
   await call('export');const artifact=await get('/api/smoke/artifact');if(!artifact.patch.includes('.pi-cloudflare-native-smoke.txt')||!artifact.patch.includes('native staging edited'))throw Error('Patch verification failed');
   await call('slow');await call('cancel');const closed=await wait('closed');
-  out.textContent='Fixed shell steps completed; closed state recorded. Confirm actual guest destruction in Cloudflare before declaring native smoke passed. Gaps: '+JSON.stringify(closed.gaps||[]);
+  if(closed.native?.running!==false||closed.native?.configured!==true||closed.gaps?.some(g=>/stop.*confirm|capture.*(?:fail|incomplete)|initializ/i.test(g)))throw Error('Native cleanup or artifacts not confirmed; inspect Containers');
+  out.textContent='PASS fixed native shell smoke: files, command, logs, patch and cancellation; container reports not running. Review/download artifact and confirm cleanup in Containers. Gaps: '+JSON.stringify(closed.gaps||[]);
  }catch(e){const reason=e.message;let cleanup='';try{await call('cancel');await wait('closed')}catch{cleanup=' Cancellation/stop unconfirmed; inspect Containers immediately.'}out.textContent=reason+cleanup}
  finally{b.disabled=false}
 };
@@ -50,10 +51,10 @@ export default {async fetch(request:Request,env:SmokeEnv){
   if(request.method==='GET'&&path==='/')return secured(new Response(PAGE,{headers:{'Content-Type':'text/html; charset=utf-8'}}));
   if(request.method==='GET'&&path==='/smoke.js')return secured(new Response(CLIENT,{headers:{'Content-Type':'text/javascript; charset=utf-8'}}));
   if(!['/api/smoke','/api/smoke/status','/api/smoke/logs','/api/smoke/artifact'].includes(path))return secured(new Response('Not found',{status:404}));
-  if(env.ENABLE_WORKSPACE!=='true'||!env.Workspaces||!env.WORKSPACE_IMAGE||!env.WORKSPACE_REPOSITORY||! /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(env.WORKSPACE_REPOSITORY)||env.WORKSPACE_REPOSITORY.split('/').some(x=>x==='.'||x==='..'))return secured(Response.json({error:'Smoke workspace is disabled or unconfigured'},{status:503}));
+  if((env.ENABLE_WORKSPACE_SMOKE??env.ENABLE_WORKSPACE)!=='true'||!env.Workspaces||!env.WORKSPACE_IMAGE||!env.WORKSPACE_REPOSITORY||! /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(env.WORKSPACE_REPOSITORY)||env.WORKSPACE_REPOSITORY.split('/').some(x=>x==='.'||x==='..'))return secured(Response.json({error:'Smoke workspace is disabled or unconfigured'},{status:503}));
   const stub=env.Workspaces.getByName(ID);
   const dispatch=async(label:string,input:WorkspaceAction)=>stub.request({...input,workspaceId:ID,operationId:await operationId(label)} as WorkspaceRequest);
-  if(request.method==='GET'&&path==='/api/smoke/status')return secured(Response.json(await dispatch('status',{action:'status'})));
+  if(request.method==='GET'&&path==='/api/smoke/status')return secured(Response.json({...await dispatch('status',{action:'status'}) as object,native:await stub.nativeState()}));
   if(request.method==='GET'&&path==='/api/smoke/logs')return secured(Response.json({stdout:await dispatch('stdout',{action:'logs',runId:await operationId('run'),stream:'stdout'}),stderr:await dispatch('stderr',{action:'logs',runId:await operationId('run'),stream:'stderr'})}));
   if(request.method==='GET'&&path==='/api/smoke/artifact')return secured(Response.json(await stub.artifact(),{headers:{'Content-Disposition':'attachment; filename="native-workspace-smoke.json"'}}));
   if(request.method!=='POST'||path!=='/api/smoke')return secured(new Response('Method not allowed',{status:405}));

@@ -12,12 +12,13 @@ import { delegation } from './delegate';
 import { readTools } from './read-tools';
 import {workspaceTools,type WorkspaceRequest,type WorkspaceToolRequest} from './workspace-tools';
 import {TaskWorkspace} from './workspace-container';
+import workspaceSmoke from './workspace-smoke';
 export {TaskWorkspace};
 import {runSearchCheck,searchCheckStatus,previousSearchCheckStatus,runGithubCheck,githubCheckStatus} from './search-check';
 import { createCredentialStore, startSubscriptionLogin, type SubscriptionLoginStatus } from './credentials';
 declare const PI_DEPLOYMENT_MODE: string;
 const deploymentMode = typeof PI_DEPLOYMENT_MODE === 'undefined' ? 'local' : PI_DEPLOYMENT_MODE;
-interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string; TAVILY_API_KEY?:string; ENABLE_WEB_SEARCH?:string; ENABLE_WEB_SEARCH_TEST?:string;ENABLE_WORKSPACE?:string;WORKSPACE_REPOSITORY?:string;WORKSPACE_IMAGE?:string;Workspaces?:DurableObjectNamespace<TaskWorkspace> }
+interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string; TAVILY_API_KEY?:string; ENABLE_WEB_SEARCH?:string; ENABLE_WEB_SEARCH_TEST?:string;ENABLE_WORKSPACE?:string;ENABLE_WORKSPACE_SMOKE?:string;WORKSPACE_REPOSITORY?:string;WORKSPACE_IMAGE?:string;Workspaces?:DurableObjectNamespace<TaskWorkspace> }
 export class Assistant extends DurableObject<Env> {
  private workspaceEnabled(){return this.env.ENABLE_WORKSPACE==='true'&&!!this.env.WORKSPACE_IMAGE&&!!this.env.Workspaces&&!!this.env.WORKSPACE_REPOSITORY&&/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(this.env.WORKSPACE_REPOSITORY)&&!this.env.WORKSPACE_REPOSITORY.split('/').some(x=>x==='.'||x==='..')}
  private async workspaceRequest(session:string,input:WorkspaceToolRequest){if(!this.workspaceEnabled())throw Error('Workspace disabled');const id=input.workspaceId??await this.ctx.storage.get<string>('workspace-session:'+session);if(!id)throw Error('Ask the owner to open a workspace first');const request={...input,workspaceId:id} as WorkspaceRequest;const owner=await this.ctx.storage.get<string>('workspace-owner:'+request.workspaceId);if(owner!==session)throw Error('Workspace is not approved for this conversation');return this.env.Workspaces!.getByName(request.workspaceId).request(request)}
@@ -138,6 +139,11 @@ export class Assistant extends DurableObject<Env> {
 export default {async fetch(request:Request,env:Env):Promise<Response>{
  try{await authorize(request,env);}catch{return secured(new Response('Private chat. Cloudflare Access sign-in and owner configuration are required.',{status:403}));}
  const url=new URL(request.url);
+ if(url.pathname==='/workspace-smoke'||url.pathname==='/smoke.js'||url.pathname.startsWith('/api/smoke')){
+  if(env.ENABLE_WORKSPACE_SMOKE!=='true')return secured(new Response('Not found',{status:404}));
+  if(url.pathname==='/workspace-smoke')url.pathname='/';
+  return workspaceSmoke.fetch(new Request(url,request),env);
+ }
  if(url.pathname.startsWith('/api/')){try{return secured(await env.Assistant.getByName('private-owner-v1').fetch(request));}catch{return secured(Response.json({error:'Private chat configuration is incomplete.'},{status:503}));}}
  if(!['GET','HEAD'].includes(request.method))return secured(new Response('Method not allowed',{status:405}));
  return secured(await env.ASSETS.fetch(request));

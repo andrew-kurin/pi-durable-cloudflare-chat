@@ -56,10 +56,17 @@ test('staging is a fresh Worker target, forces provider calls off, and rejects p
  assert.deepEqual(JSON.parse(result.config.vars.WORKSPACE_LIMITS),{taskMs:720000,commandMs:600000,idleMs:60000,warningMs:60000});assert.equal(result.config.vars.CREDENTIAL_ENCRYPTION_KEY,undefined);assert.equal(result.config.vars.TAVILY_API_KEY,undefined);assert.equal(result.config.routes,undefined);
  for(const options of [{DEPLOY_TARGET:'other'},{DEPLOY_TARGET:'staging'},{...flags,CUSTOM_DOMAIN:'pi-chat.example.com',APP_ORIGIN:'https://pi-chat.example.com'}])assert.notEqual(prepare(options).status,0);
 });
-test('manual workflow selects separate reviewed environments and passes workspace settings without image upload',()=>{
+test('manual workflow selects reviewed environments and gates image upload in the environment deployment job',()=>{
  const workflow=readFileSync('.github/workflows/deploy.yml','utf8');
  assert.match(workflow,/environment: \$\{\{ inputs.target \|\| 'production' \}\}/);assert.match(workflow,/DEPLOY_TARGET: \$\{\{ inputs.target \|\| 'production' \}\}/);
- for(const setting of ['PROVISION_WORKSPACE','ENABLE_WORKSPACE','WORKSPACE_REPOSITORY','WORKSPACE_IMAGE_REFERENCE'])assert.ok(workflow.includes(`${setting}: \${{ vars.${setting} }}`));
- assert.ok(!workflow.includes('containers push'));assert.ok(!workflow.includes('containers build'));
+ for(const setting of ['PROVISION_WORKSPACE','ENABLE_WORKSPACE','WORKSPACE_REPOSITORY','ENABLE_WORKSPACE_SMOKE'])assert.ok(workflow.includes(`${setting}: \${{ vars.${setting} }}`));
+ assert.ok(workflow.includes('WORKSPACE_IMAGE_REFERENCE: ${{ env.WORKSPACE_IMAGE_REFERENCE || vars.WORKSPACE_IMAGE_REFERENCE }}'));
+ assert.ok(workflow.indexOf('Build and upload approved workspace image')>workflow.indexOf('environment:'));assert.match(workflow,/if: inputs.build_workspace_image/);assert.match(workflow,/--platform linux\/amd64/);assert.match(workflow,/RepoDigests/);
  assert.ok(!workflow.includes('CREDENTIAL_ENCRYPTION_KEY'));assert.ok(!workflow.includes('secret list'));
+});
+test('production smoke preserves provider/origin settings while ordinary workspace tools stay off',()=>{
+ const flags={...workspaceSettings,ENABLE_WORKSPACE_SMOKE:'true',ENABLE_MODEL:'true',ENABLE_WEB_SEARCH:'true',CUSTOM_DOMAIN:'pi-chat.example.com',APP_ORIGIN:'https://pi-chat.example.com',WORKERS_DEV:'false'};
+ const r=prepare(flags);assert.equal(r.status,0,r.error);assert.equal(r.config.main,'src/index.ts');assert.equal(r.config.vars.ENABLE_WORKSPACE,'false');assert.equal(r.config.vars.ENABLE_WORKSPACE_SMOKE,'true');assert.equal(r.config.vars.ENABLE_MODEL,'true');assert.equal(r.config.vars.ENABLE_WEB_SEARCH,'true');assert.equal(r.config.vars.APP_ORIGIN,flags.APP_ORIGIN);assert.equal(r.config.workers_dev,false);assert.equal(r.config.routes,undefined);assert.equal(JSON.parse(r.config.vars.WORKSPACE_LIMITS).taskMs,720000);
+ assert.notEqual(prepare({...flags,ENABLE_WORKSPACE:'true'}).status,0);assert.notEqual(prepare({ENABLE_WORKSPACE_SMOKE:'true'}).status,0);
+ const enabled=prepare({...flags,ENABLE_WORKSPACE:'true',ENABLE_WORKSPACE_SMOKE:'false'});assert.equal(enabled.status,0,enabled.error);assert.equal(enabled.config.vars.WORKSPACE_LIMITS,undefined);assert.notEqual(enabled.config.define.PI_DEPLOYMENT_MODE,r.config.define.PI_DEPLOYMENT_MODE);
 });

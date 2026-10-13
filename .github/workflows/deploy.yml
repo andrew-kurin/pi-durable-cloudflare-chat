@@ -10,6 +10,10 @@ on:
         options:
           - production
           - staging
+      build_workspace_image:
+        description: 'Approved one-image build/upload; pin its registry manifest digest'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -59,6 +63,21 @@ jobs:
         with:
           node-version: '24'
       - run: npm ci --no-audit --no-fund
+      - name: Build and upload approved workspace image
+        if: inputs.build_workspace_image
+        run: |
+          task_image_tag="pi-workspace:${GITHUB_SHA}"
+          docker build --platform linux/amd64 --tag "$task_image_tag" --file workspace/Dockerfile workspace
+          npx --no-install wrangler containers push "$task_image_tag"
+          task_registry_tag="registry.cloudflare.com/${CLOUDFLARE_ACCOUNT_ID}/${task_image_tag}"
+          docker pull "$task_registry_tag"
+          task_registry_ref=$(docker image inspect "$task_registry_tag" --format '{{join .RepoDigests "\n"}}' | sed -n '\|^registry.cloudflare.com/|p' | head -1)
+          printf '%s' "$task_registry_ref" | grep -Eq '^registry\.cloudflare\.com/[a-f0-9]{32}/pi-workspace@sha256:[a-f0-9]{64}$'
+          printf 'WORKSPACE_IMAGE_REFERENCE=%s\n' "$task_registry_ref" >> "$GITHUB_ENV"
+          printf 'Pinned workspace image: %s\n' "$task_registry_ref" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       - name: Prepare private deployment configuration
         run: node scripts/prepare-deploy.mjs
         env:
@@ -76,8 +95,9 @@ jobs:
           ENABLE_WEB_SEARCH_TEST: ${{ vars.ENABLE_WEB_SEARCH_TEST }}
           PROVISION_WORKSPACE: ${{ vars.PROVISION_WORKSPACE }}
           ENABLE_WORKSPACE: ${{ vars.ENABLE_WORKSPACE }}
+          ENABLE_WORKSPACE_SMOKE: ${{ vars.ENABLE_WORKSPACE_SMOKE }}
           WORKSPACE_REPOSITORY: ${{ vars.WORKSPACE_REPOSITORY }}
-          WORKSPACE_IMAGE_REFERENCE: ${{ vars.WORKSPACE_IMAGE_REFERENCE }}
+          WORKSPACE_IMAGE_REFERENCE: ${{ env.WORKSPACE_IMAGE_REFERENCE || vars.WORKSPACE_IMAGE_REFERENCE }}
       - name: Deploy validated commit
         run: npx --no-install wrangler deploy --config .deploy.wrangler.json
         env:
