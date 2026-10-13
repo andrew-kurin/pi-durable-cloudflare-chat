@@ -8,7 +8,7 @@ import {toolActivity} from '../public/tool-activity.js';
 const user={id:'u',kind:'pi.user',model:[{role:'user',content:'Review the project'}]} as never;
 const call={id:'a',kind:'pi.assistant',model:[{role:'assistant',content:[{type:'toolCall',id:'c',name:'workspace_status',arguments:{}}]}]} as never;
 const result={id:'r',kind:'pi.tool-result',model:[{role:'toolResult',toolCallId:'c',toolName:'workspace_status',content:[{type:'text',text:JSON.stringify({data:{phase:'ready'}})}]}]} as never;
-const failure={id:'e',kind:'pi.assistant',model:[{role:'assistant',content:[],stopReason:'error',errorMessage:'PRIVATE_TOKEN_DIAGNOSTIC'}]} as never;
+const failure={id:'e',kind:'pi.assistant',model:[{role:'assistant',content:[],stopReason:'error',errorMessage:'400: No tool output found for function call PRIVATE_TOKEN_DIAGNOSTIC'}]} as never;
 const reply={id:'reply',kind:'pi.assistant',model:[{role:'assistant',content:[{type:'text',text:'Review complete.'}],stopReason:'stop'}]} as never;
 function snapshot(entries:never[]){return {type:'snapshot',entries,tools:[],inbox:[],agent:{},usage:{},compactions:[]} as never;}
 async function browser(){
@@ -24,7 +24,7 @@ test('actual chat UI displays terminal model error after workspace tool results 
  const p=new ChatProjection();p.apply({type:'run_start',inputs:[]});for(const entry of [user,call,result,failure])p.apply({type:'entry_appended',entry});p.apply({type:'run_end',inputs:[]});
  for(const reload of [false,true]){
   if(reload)p.apply(snapshot([user,call,result,failure]));
-  const b=await browser();try{b.send(p);const d=b.dom.window.document;assert.match(d.getElementById('messages')!.textContent!,/Sol could not finish/);assert.match(d.getElementById('messages')!.textContent!,/Workspace · Process status/);assert.ok(!d.body.textContent!.includes('PRIVATE_TOKEN_DIAGNOSTIC'));assert.equal((d.getElementById('send') as HTMLButtonElement).disabled,false);assert.ok(b.requests.every(path=>!path.includes('submit')));}finally{b.dom.window.close()}
+  const b=await browser();try{b.send(p);const d=b.dom.window.document;assert.match(d.getElementById('messages')!.textContent!,/Sol could not finish/);assert.match(d.getElementById('messages')!.textContent!,/Diagnostic hint: tool response protocol.*Reported HTTP 400/);assert.match(d.getElementById('messages')!.textContent!,/Workspace · Process status/);assert.ok(!d.body.textContent!.includes('PRIVATE_TOKEN_DIAGNOSTIC'));assert.equal((d.getElementById('send') as HTMLButtonElement).disabled,false);assert.ok(b.requests.every(path=>!path.includes('submit')));}finally{b.dom.window.close()}
  }
 });
 test('actual chat UI keeps task fault visible through run_end and clears it when next run starts',async()=>{
