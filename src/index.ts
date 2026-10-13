@@ -28,12 +28,15 @@ export class Assistant extends DurableObject<Env> {
  private loginStatus: SubscriptionLoginStatus = {status:'disabled'};
  private loginActive = false;
  private activeStreams = 0;
+ private streamStops=new Map<string,()=>Promise<void>>();
+ private closedStreams=new Map<string,number>();
  private admission: Promise<unknown> = Promise.resolve();
  harness = new PiHarness({harness:({storage,context})=>{const registry=createRegistry();registry.install(delegation());if(this.workspaceEnabled())registry.install(workspaceTools({request:(session,r)=>this.workspaceRequest(session,r)}));registry.install(readTools(this.ctx.storage,this.env));const provider=createWorkerCodexProvider();this.models.setProvider(provider);return Harness.open(storage,{models:this.models,registry,settings:{compaction:{enabled:false},progress:{partialIntervalMs:250,outputIntervalMs:500},retry:{enabled:true,maxRetries:1,baseDelayMs:1000},stream:{transport:'sse',timeoutMs:120000,maxRetries:0}}},context);},defaults:{model:{provider:'openai-codex',id:'gpt-6-sol'},thinkingLevel:'low'}});
  lifecycle = Lifecycle.install(this).use(this.harness);
  async fetch(request:Request):Promise<Response>{
   try{await authorize(request,this.env);}catch{return new Response('Forbidden',{status:403});}
   // Cancellation/extension must reach the workspace even while setup is awaiting I/O.
+  if(request.method==='POST'&&new URL(request.url).pathname==='/api/events/close')return this.handle(request);
   if(request.method==='POST'&&/^\/api\/workspaces\/[a-f0-9-]{36}(?:\/extend)?$/.test(new URL(request.url).pathname))return this.handle(request);
   if(request.method==='POST'){const work=this.admission.then(()=>this.handle(request));this.admission=work.then(()=>undefined,()=>undefined);return work;}
   return this.handle(request);
@@ -119,20 +122,36 @@ export class Assistant extends DurableObject<Env> {
     const receipt=await this.harness.submit(b.text,{session:sid,operationId:b.operationId});await this.ctx.storage.put(key,{digest,receipt});if(!await this.ctx.storage.get(`chat-auto-title:${sid}`)){const title=conversationTitle(b.text);if(title)await this.ctx.storage.put(`chat-auto-title:${sid}`,title);}return Response.json(receipt);
    }
    if(path==='/api/abort'&&request.method==='POST')return Response.json({aborted:await this.harness.abort({session:sid})});
+   if(path==='/api/events/close'&&request.method==='POST'){
+    const id=url.searchParams.get('stream');if(!id||!/^[a-f0-9-]{36}$/.test(id))return Response.json({error:'Invalid stream'},{status:400});
+    this.closedStreams.set(id,Date.now()+55000);while(this.closedStreams.size>64)this.closedStreams.delete(this.closedStreams.keys().next().value!);
+    await this.streamStops.get(id)?.();return Response.json({closed:true});
+   }
    if(path==='/api/events'&&request.method==='GET'){
-    if(this.activeStreams>=3)return Response.json({error:'Too many open chats'},{status:429});
-    this.activeStreams++;let events;try{events=await this.harness.session(sid).events();}catch(error){this.activeStreams--;throw error;}const projection=new ChatProjection();projection.apply(events.snapshot);
-    const diagnostic=url.searchParams.get('diagnostic')==='saved-error'?await diagnoseSavedErrorRead(url,events.snapshot.entries,this.ctx.storage,sid):undefined;
-    const customTitle=await this.ctx.storage.get<string>(`chat-title:${sid}`);const autoTitle=await this.ctx.storage.get<string>(`chat-auto-title:${sid}`);const title=customTitle??autoTitle??conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text);
-    const encoder=new TextEncoder();let ended=false;let timer:ReturnType<typeof setTimeout>;
-    const stop=async()=>{if(ended)return;ended=true;clearTimeout(timer);this.activeStreams--;await events.stop();};
-    const body=new ReadableStream<Uint8Array>({start:controller=>{
-     const send=()=>{if(!ended)controller.enqueue(encoder.encode(`data: ${JSON.stringify({...projection.view(),...(diagnostic?{diagnostic}:{}),title:title||conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text)})}\n\n`));};send();
-     events.start(async batch=>{batch.forEach(e=>projection.apply(e));const entries=batch.flatMap(e=>e.type==='message_end'||e.type==='entry_appended'?[e.entry]:[]);if(entries.length)await logSavedFailure(entries,this.ctx.storage,sid,'live-v1');send();});
-     timer=setTimeout(()=>{if(!ended){controller.close();void stop();}},55000);
-     request.signal.addEventListener('abort',()=>{void stop();},{once:true});
-    },cancel:()=>stop()});
-    return new Response(body,{headers:{'Content-Type':'text/event-stream','Cache-Control':'no-store',...(diagnostic?{'X-Pi-Diagnostic-Outcome':diagnostic.outcome}:{})}});
+    const id=url.searchParams.get('stream');if(id!==null&&!/^[a-f0-9-]{36}$/.test(id))return Response.json({error:'Invalid stream'},{status:400});
+    for(const [key,deadline] of this.closedStreams)if(deadline<=Date.now())this.closedStreams.delete(key);
+    if(id&&this.closedStreams.has(id))return new Response(null,{status:204});
+    while(id&&this.streamStops.has(id))await this.streamStops.get(id)!();
+    if(id&&this.closedStreams.has(id))return new Response(null,{status:204});
+    if(this.activeStreams>=3)return Response.json({error:'Too many open chats. Close another chat and retry loading history.'},{status:429});
+    this.activeStreams++;let events:Awaited<ReturnType<ReturnType<typeof this.harness.session>['events']>>|undefined;let ended=false;let timer:ReturnType<typeof setTimeout>|undefined;let controller:ReadableStreamDefaultController<Uint8Array>|undefined;
+    const onAbort=()=>{void stop();};
+    const stop=async()=>{if(ended)return;ended=true;clearTimeout(timer);this.activeStreams--;if(id&&this.streamStops.get(id)===stop)this.streamStops.delete(id);request.signal.removeEventListener('abort',onAbort);try{controller?.close();}catch{}try{await events?.stop();}catch(error){logTechnicalError('request',error,crypto.randomUUID());}};
+    if(id)this.streamStops.set(id,stop);
+    try{
+     events=await this.harness.session(sid).events();if(ended){await events.stop();return new Response(null,{status:204});}
+     const projection=new ChatProjection();projection.apply(events.snapshot);
+     const diagnostic=url.searchParams.get('diagnostic')==='saved-error'?await diagnoseSavedErrorRead(url,events.snapshot.entries,this.ctx.storage,sid):undefined;
+     const customTitle=await this.ctx.storage.get<string>(`chat-title:${sid}`);const autoTitle=await this.ctx.storage.get<string>(`chat-auto-title:${sid}`);const title=customTitle??autoTitle??conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text);
+     if(ended)return new Response(null,{status:204});
+     const encoder=new TextEncoder();const source=events;
+     const body=new ReadableStream<Uint8Array>({start:c=>{controller=c;
+      const send=()=>{if(!ended)controller!.enqueue(encoder.encode(`data: ${JSON.stringify({...projection.view(),...(diagnostic?{diagnostic}:{}),title:title||conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text)})}\n\n`));};send();
+      source.start(async batch=>{batch.forEach(e=>projection.apply(e));const entries=batch.flatMap(e=>e.type==='message_end'||e.type==='entry_appended'?[e.entry]:[]);if(entries.length)await logSavedFailure(entries,this.ctx.storage,sid,'live-v1');send();});
+      timer=setTimeout(()=>{void stop();},55000);request.signal.addEventListener('abort',onAbort,{once:true});if(request.signal.aborted)void stop();
+     },cancel:()=>stop()});
+     return new Response(body,{headers:{'Content-Type':'text/event-stream','Cache-Control':'no-store',...(diagnostic?{'X-Pi-Diagnostic-Outcome':diagnostic.outcome}:{})}});
+    }catch(error){await stop();throw error;}
    }
    return Response.json({error:'Not found'},{status:404});
   }catch(error){logTechnicalError('request',error,crypto.randomUUID());return Response.json({error:'Request unavailable. Your saved chat is unchanged.'},{status:500});}
