@@ -1,3 +1,4 @@
+import {modelErrorDiagnostic} from './model-error';
 import type { AgentEvent, EntryRecord } from '@earendil-works/pi-durable';
 import { toolLabel, stateDetail, resultSummary, type ToolActivity, type ToolState, type ToolLinkage } from './tool-activity';
 export function entryText(entry: EntryRecord) {
@@ -32,7 +33,7 @@ export class ChatProjection {
   if(entry.kind==='pi.user')this.failed=false;
   else if(modelError)this.failed=true;
   else if(entryText(entry).trim())this.failed=false;
-  const item = {id:String(entry.id),role:entry.kind==='pi.user'?'user':'assistant',text:modelError?this.failureText:entryText(entry)};
+  const item = {id:String(entry.id),role:entry.kind==='pi.user'?'user':'assistant',text:modelError?this.failureText+' '+modelErrorDiagnostic(entry.model?.filter(m=>m.role==='assistant').find(m=>m.stopReason==='error')?.errorMessage):entryText(entry)};
   const at = this.messages.findIndex(m=>m.id===item.id); if(at<0)this.messages.push(item);else this.messages[at]=item;
  }
  apply(e: AgentEvent) {
