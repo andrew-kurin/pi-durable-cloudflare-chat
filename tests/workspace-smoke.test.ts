@@ -40,7 +40,7 @@ test('owner-only shell staging runs fixed smoke through the actual controller wi
   for(const route of ['/api/login','/api/submit','/api/sessions'])assert.equal((await mf.dispatchFetch(base+route,{headers})).status,404);
   for(const input of [['exec',{}],['run',{argv:['curl','https://example.test']}],['extend',{}],['open',{workspaceId:'other'}]])assert.equal((await action(input[0] as string,input[1])).status,400);
   assert.equal((await mf.dispatchFetch(base+'/api/smoke',{method:'POST',headers,body:'{bad'})).status,400);
-  const opened=await action('open');assert.equal(opened.status,200);assert.equal((await opened.json() as any).phase,'ready');
+  const opened=await action('open');assert.equal(opened.status,200);const openedState=await opened.json() as any;assert.equal(openedState.phase,'ready');assert.equal(openedState.id,'00000000-0000-4000-8000-000000000002');assert.equal(openedState.session,'native-shell-smoke-v2');
   for(const step of ['create','edit'])assert.equal((await action(step)).status,200);
   assert.equal((await (await action('read')).json() as any).text,'native staging edited\n');
   const run=await action('run');assert.equal(run.status,200);
