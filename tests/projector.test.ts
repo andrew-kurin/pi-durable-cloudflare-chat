@@ -58,3 +58,14 @@ test('observed live numeric IDs, multiple rounds and intervening Continue inputs
  const entries=[user('24'),assistant('28',[{id:'call_first|fc_synthetic1',name:'web_search'}]),{...resultEntry('call_first|fc_synthetic1','web_search'),id:30} as never,assistant('32',[{id:'call_second|fc_synthetic2',name:'web_search'}]),{...resultEntry('call_second|fc_synthetic2','web_search'),id:34} as never,answer('36','Recorded response'),user('37'),assistant('40',[{id:'old1',name:'github_search'}]),{...resultEntry('old1','github_search'),id:42} as never,assistant('44',[{id:'old2',name:'web_search'}]),{...resultEntry('old2','web_search'),id:46} as never,assistant('48',[{id:'old3',name:'github_read'}]),{...resultEntry('old3','github_read'),id:50} as never,user('54'),assistant('57',[{id:'new',name:'github_read'}]),{...resultEntry('new','github_read'),id:59} as never,answer('61','Following response')];
  const p=new ChatProjection();p.apply(snapshot(entries));const view=p.view();assert.equal(view.projectionVersion,2);assert.deepEqual(view.messages.find(m=>m.id==='36')!.tools.map(t=>[t.roundId,t.linkage]),[['28','following_response'],['32','following_response']]);for(const id of ['40','44','48'])assert.equal(view.messages.find(m=>m.id===id)!.tools[0].linkage,'user_boundary');assert.equal(view.messages.find(m=>m.id==='61')!.tools[0].id,'new');assert.equal(view.messages.flatMap(m=>m.tools).length,6);
 });
+
+test('model continuation failure after successful workspace tools remains visible after run end and reconnect without raw errors',()=>{
+ const failed={id:'failure',kind:'pi.assistant',model:[{role:'assistant',content:[],stopReason:'error',errorMessage:'private provider token'}]} as never;
+ const entries=[user('u'),assistant('a',[{id:'c',name:'workspace_status'}]),resultEntry('c','workspace_status',{phase:'ready'}),failed];
+ const p=new ChatProjection();for(const entry of entries)p.apply({type:'entry_appended',entry});p.apply({type:'run_end',inputs:[]});
+ const live=p.view();assert.equal(live.busy,false);assert.match(live.messages.find(m=>m.id==='failure')!.text,/could not finish/);assert.equal(live.messages.find(m=>m.id==='failure')!.tools[0].state,'success');assert.ok(!JSON.stringify(live).includes('private provider token'));
+ p.apply(snapshot(entries));assert.match(p.view().messages.find(m=>m.id==='failure')!.text,/could not finish/);assert.ok(!JSON.stringify(p.view()).includes('private provider token'));
+});
+test('task fault notification survives run end and clears on a new run',()=>{
+ const p=new ChatProjection();p.apply({type:'task_failed',taskId:'1' as never,kind:'network',message:'private raw error'});p.apply({type:'run_end',inputs:[]});assert.match(p.view().activity,/could not finish/);assert.ok(!JSON.stringify(p.view()).includes('private raw error'));p.apply({type:'run_start',inputs:[]});assert.equal(p.view().activity,'');
+});

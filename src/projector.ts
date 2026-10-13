@@ -7,6 +7,8 @@ export class ChatProjection {
  messages: {id:string; role:string; text:string}[] = []; partial: Record<number,string> = {}; busy = false; activity = '';
  private entries: {id:string;kind:string;turnId?:string}[] = [];
  private turnId?:string;
+ private failed = false;
+ private readonly failureText = 'Sol could not finish this response. Saved tool results remain available; check workspace status before retrying commands.';
  private tools = new Map<string,ToolActivity & {messageId?:string; resultId?:string; name:string}>();
  private tool(id:string,name:string,state:ToolState,messageId?:string) {
   if(typeof id!=='string'||!id||id.length>200) return;
@@ -26,13 +28,17 @@ export class ChatProjection {
   }
   this.calls(entry);
   if (!['pi.user','pi.assistant'].includes(entry.kind)) return;
-  const item = {id:String(entry.id),role:entry.kind==='pi.user'?'user':'assistant',text:entryText(entry)};
+  const modelError = entry.kind==='pi.assistant' && entry.model?.some(m=>m.role==='assistant' && m.stopReason==='error');
+  if(entry.kind==='pi.user')this.failed=false;
+  else if(modelError)this.failed=true;
+  else if(entryText(entry).trim())this.failed=false;
+  const item = {id:String(entry.id),role:entry.kind==='pi.user'?'user':'assistant',text:modelError?this.failureText:entryText(entry)};
   const at = this.messages.findIndex(m=>m.id===item.id); if(at<0)this.messages.push(item);else this.messages[at]=item;
  }
  apply(e: AgentEvent) {
-  if(e.type==='snapshot') {this.messages=[];this.entries=[];this.turnId=undefined;this.tools.clear();e.entries.forEach(x=>this.entry(x));this.partial={};e.generation?.message?.content.forEach((p,i)=>{if(p.type==='text')this.partial[i]=p.text;});this.busy=!!e.run;for(const row of this.tools.values())if(row.state==='pending'){row.state='unavailable';row.detail=stateDetail(row.state);}for(const slot of e.tools){const row=this.tool(slot.callId,slot.name,'unavailable');if(row&&slot.status!=='done'){row.state=slot.status;row.detail=stateDetail(row.state);}}this.activity=e.tools.some(t=>t.status==='pending'||t.status==='running')?'Reading sources or working with Luna…':'';}
-  if(e.type==='run_start')this.busy=true;
-  if(e.type==='run_end'){for(const row of this.tools.values())if(row.state==='pending'||row.state==='running'){row.state='unavailable';row.detail=stateDetail(row.state);}this.busy=false;this.partial={};this.activity='';}
+  if(e.type==='snapshot') {this.messages=[];this.entries=[];this.turnId=undefined;this.failed=false;this.tools.clear();e.entries.forEach(x=>this.entry(x));this.partial={};e.generation?.message?.content.forEach((p,i)=>{if(p.type==='text')this.partial[i]=p.text;});this.busy=!!e.run;for(const row of this.tools.values())if(row.state==='pending'){row.state='unavailable';row.detail=stateDetail(row.state);}for(const slot of e.tools){const row=this.tool(slot.callId,slot.name,'unavailable');if(row&&slot.status!=='done'){row.state=slot.status;row.detail=stateDetail(row.state);}}this.activity=e.tools.some(t=>t.status==='pending'||t.status==='running')?'Reading sources or working with Luna…':'';}
+  if(e.type==='run_start'){this.busy=true;this.failed=false;this.activity='';}
+  if(e.type==='run_end'){for(const row of this.tools.values())if(row.state==='pending'||row.state==='running'){row.state='unavailable';row.detail=stateDetail(row.state);}this.busy=false;this.partial={};this.activity=this.failed?this.failureText:'';}
   if(e.type==='message_start'){this.partial={};e.message.content && Array.isArray(e.message.content) && e.message.content.forEach((p,i)=>{if(p.type==='text')this.partial[i]=p.text;});}
   if(e.type==='message_update')for(const c of e.changes){if(c.type==='text_delta')this.partial[c.contentIndex]=(this.partial[c.contentIndex]??'')+c.delta;else if((c.type==='text_start'||c.type==='block')&&c.block.type==='text')this.partial[c.contentIndex]=c.block.text;else if(c.type==='message'){this.partial={};c.message.content.forEach((p,i)=>{if(p.type==='text')this.partial[i]=p.text;});}}
   if(e.type==='message_end'){this.entry(e.entry);this.partial={};}
@@ -40,7 +46,7 @@ export class ChatProjection {
   if(e.type==='tool_execution_start'){const row=this.tool(e.toolCallId,e.toolName,'running');if(row&&!['success','error','interrupted'].includes(row.state)){row.state='running';row.detail=stateDetail(row.state);}}
   if(e.type==='tool_execution_start')this.activity=e.toolName==='ask_luna'?'Working with Luna…':e.toolName==='web_search'?'Searching the public web…':e.toolName==='fetch_page'?'Reading a public page…':['github_read','github_search'].includes(e.toolName)?'Reading public GitHub…':'Working with a tool…';
   if(e.type==='tool_execution_end'){if(e.entry)this.entry(e.entry);else{const row=this.tool(e.toolCallId,e.toolName,'unavailable');if(row&&!['success','error','interrupted'].includes(row.state)){row.state='unavailable';row.detail=stateDetail(row.state);}}this.activity=[...this.tools.values()].some(t=>t.state==='running'||t.state==='pending')?'Reading sources or working with Luna…':'';}
-  if(e.type==='task_failed')this.activity='The request failed. Check connection settings and try again.';
+  if(e.type==='task_failed'){this.failed=true;this.activity=this.failureText;}
  }
  view(){
   const messages=this.messages.map(m=>({...m,tools:[] as (ToolActivity & {roundId?:string})[]}));
