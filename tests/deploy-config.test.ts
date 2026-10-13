@@ -70,3 +70,8 @@ test('production smoke preserves provider/origin settings while ordinary workspa
  assert.notEqual(prepare({...flags,ENABLE_WORKSPACE:'true'}).status,0);assert.notEqual(prepare({ENABLE_WORKSPACE_SMOKE:'true'}).status,0);
  const enabled=prepare({...flags,ENABLE_WORKSPACE:'true',ENABLE_WORKSPACE_SMOKE:'false'});assert.equal(enabled.status,0,enabled.error);assert.equal(enabled.config.vars.WORKSPACE_LIMITS,undefined);assert.notEqual(enabled.config.define.PI_DEPLOYMENT_MODE,r.config.define.PI_DEPLOYMENT_MODE);
 });
+
+test('production deployments preserve owner-enabled retained invocation logs while traces/issues remain off',()=>{
+ for(const flags of [{},{...workspaceSettings,ENABLE_WORKSPACE:'true',ENABLE_WORKSPACE_SMOKE:'false'}]){const r=prepare(flags);assert.equal(r.status,0,r.error);assert.deepEqual(r.config.observability.logs,{enabled:true,head_sampling_rate:1,invocation_logs:true,persist:true});assert.deepEqual(r.config.observability.traces,{enabled:false,head_sampling_rate:1,persist:true});assert.deepEqual(r.config.observability.issues,{enabled:false});assert.equal(r.config.observability.issue_detection,undefined);}
+ const staging=prepare({...workspaceSettings,DEPLOY_TARGET:'staging',APP_ORIGIN:'https://pi-private-chat-workspace-staging.synthetic.workers.dev',ENABLE_WORKSPACE:'true'});assert.deepEqual(staging.config.observability,{enabled:false});
+});

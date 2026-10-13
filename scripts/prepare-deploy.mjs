@@ -77,7 +77,8 @@ config.workers_dev = workersDev === 'true';
 delete config.routes;
 delete config.route;
 config.preview_urls = false;
-config.observability = { enabled: false };
+// Preserve the owner's reviewed production logging settings from the template.
+if (target === 'staging') config.observability = { enabled: false };
 // A bundle change restarts live Durable Objects when feature bindings change.
 const mode = modelEnabled === 'true' ? 'chat' : loginEnabled === 'true' ? 'setup' : 'off';
 config.define = { ...(config.define || {}), PI_DEPLOYMENT_MODE: JSON.stringify(`${mode}:web-${webSearchEnabled}:test-${webSearchTest}:origin-${app.hostname}`) };

@@ -23,3 +23,14 @@ test('cookie lines, unknown provider fields and malformed request input stay out
 test('provider code extraction ignores codes in omitted request context',()=>{const data=technicalError('400: '+JSON.stringify({request:{code:'private_context_identifier'}}));assert.equal(data.code,undefined);assert.ok(!JSON.stringify(data).includes('private_context_identifier'));assert.equal(technicalError('400: '+JSON.stringify({error:{code:'invalid_request_error',request:{code:'private_context_identifier'}}})).code,'invalid_request_error');});
 
 test('oversized provider bodies are not parsed for codes',()=>{assert.equal(technicalError('400: '+JSON.stringify({padding:'x'.repeat(9000),error:{code:'invalid_request_error'}})).code,undefined);});
+
+
+test('failed saved-error emission leaves the capture retryable, then deduplicates a successful retry',async()=>{
+ const data=new Map<string,any>();const tx={get:async(k:string)=>data.get(k),put:async(k:string,v:any)=>{data.set(k,v)}};const store={...tx,transaction:async<T>(fn:(tx:typeof tx)=>Promise<T>)=>fn(tx)};
+ const entries=[{id:'failure',kind:'pi.assistant',model:[{role:'assistant',stopReason:'error',errorMessage:'Technical failure Bearer PRIVATE_TOKEN'}]}] as never;
+ assert.equal(await logSavedFailure(entries,store,'session','capture',()=>{throw Error('emitter unavailable')}),false);
+ assert.equal(data.has('diagnostic:saved-error:session'),false);
+ const logs:any[]=[];assert.equal(await logSavedFailure(entries,store,'session','capture',r=>logs.push(r)),true);
+ assert.equal(await logSavedFailure(entries,store,'session','capture',r=>logs.push(r)),false);
+ assert.equal(logs.length,1);assert.equal(data.get('diagnostic:saved-error:session').length,1);assert.ok(!JSON.stringify(logs).includes('PRIVATE_TOKEN'));
+});
