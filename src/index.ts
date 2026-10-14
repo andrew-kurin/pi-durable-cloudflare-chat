@@ -33,6 +33,7 @@ export class Assistant extends DurableObject<Env> {
  private grokLoginActive=false;
  private grokLoginStatus:GrokLoginStatus={status:'disabled'};
  private grokModels(){const models=createModels({credentials:this.credentials,authContext:{env:async()=>undefined,fileExists:async()=>false}});models.setProvider(createWorkerGrokProvider());return models;}
+ private async chatSessions(){const ids=new Set<string>();const storage=await this.harness.storage();let cursor;do{const page=await storage.scanConversations({},100,cursor,BACKGROUND_CONTEXT);for(const row of page.items)if(!row.owner&&!row.parent)ids.add(String(row.id));cursor=page.next;}while(cursor);return(await this.harness.sessions.list()).filter(row=>ids.has(row.id));}
  private async sessionModel(sid:string){return (await (await this.harness.conversation(sid)).agent(BACKGROUND_CONTEXT)).model??{provider:'openai-codex',modelId:'gpt-6-sol'};}
  private activeStreams = 0;
  private streamStops=new Map<string,()=>Promise<void>>();
@@ -52,6 +53,7 @@ export class Assistant extends DurableObject<Env> {
   const url=new URL(request.url);const path=url.pathname;const sid=url.searchParams.get('session')??'1';
   if(!/^\d{1,12}$/.test(sid))return Response.json({error:'Invalid session'},{status:400});
   try{
+   if((path==='/api/status'||path==='/api/events'||path==='/api/submit'||path==='/api/session-title'||path.startsWith('/api/workspaces'))&&await this.ctx.storage.get<number>('chat-deleted:'+sid))return Response.json({error:'Chat is in Recently deleted. Restore it before opening.'},{status:410});
    if(path.startsWith('/api/grok/')){
     if(this.env.ENABLE_GROK_SUBSCRIPTION!=='true')return Response.json({error:'Grok setup is not enabled'},{status:404});
     if(path==='/api/grok/status'&&request.method==='GET')return Response.json({connected:(await this.credentials.list()).some(c=>c.providerId==='xai'&&c.type==='oauth'),login:this.grokLoginStatus,models:grokCatalog(),budget:GROK_CHECK_BUDGET,check:await this.ctx.storage.get<{state:string;report:GrokCheckResult}>('grok-tool-check:v1')??null});
@@ -118,7 +120,13 @@ export class Assistant extends DurableObject<Env> {
     },cancel:()=>{abort.abort();}});
     return new Response(body,{headers:{'Content-Type':'application/x-ndjson','Cache-Control':'no-store'}});
    }
-   if(path==='/api/sessions'&&request.method==='GET')return Response.json(await Promise.all((await this.harness.sessions.list()).filter(x=>!x.parent).map(async s=>({...s,title:await this.ctx.storage.get<string>(`chat-title:${s.id}`)??await this.ctx.storage.get<string>(`chat-auto-title:${s.id}`)??''}))));
+   if(path==='/api/sessions'&&request.method==='GET'){const deleted=url.searchParams.get('deleted')==='1';const chats=await Promise.all((await this.chatSessions()).map(async row=>({...row,title:await this.ctx.storage.get<string>('chat-title:'+row.id)??await this.ctx.storage.get<string>('chat-auto-title:'+row.id)??'',deletedAt:await this.ctx.storage.get<number>('chat-deleted:'+row.id)})));return Response.json(chats.filter(row=>!!row.deletedAt===deleted).sort((a,b)=>Number(b.id)-Number(a.id)));}
+   if(path==='/api/session-trash'&&request.method==='POST'){
+    const raw=await request.text();if(raw.length>100)return Response.json({error:'Invalid chat action'},{status:400});const body=JSON.parse(raw);if(!body||Object.keys(body).length!==1||!['delete','restore'].includes(body.action))return Response.json({error:'Use delete or restore'},{status:400});
+    const row=(await this.chatSessions()).find(row=>row.id===sid);if(!row)return Response.json({error:'Chat not found'},{status:404});const key='chat-deleted:'+sid;
+    if(body.action==='delete'){if(row.busy||(await this.harness.pending({session:sid})).length)return Response.json({error:'Wait for the response to finish before deleting this chat'},{status:409});const workspace=await this.ctx.storage.get<string>('workspace-session:'+sid);if(workspace&&this.workspaceEnabled()){const state=await this.workspaceRequest(sid,{workspaceId:workspace,action:'status',operationId:'0'.repeat(64)}) as {phase:string};if(state.phase!=='closed')return Response.json({error:'Close the workspace before deleting this chat'},{status:409});}const previous=await this.ctx.storage.get<number>(key);if(!previous)await this.ctx.storage.put(key,Date.now());return Response.json({id:sid,deleted:true});}
+    await this.ctx.storage.delete(key);return Response.json({id:sid,deleted:false});
+   }
    if(path==='/api/session-title'&&request.method==='POST'){
     const raw=await request.text();if(raw.length>1000)return Response.json({error:'Title too long'},{status:400});
     const b=JSON.parse(raw);if(typeof b.title!=='string'||!b.title.trim()||b.title.length>80||/[\x00-\x1f\x7f]/.test(b.title))return Response.json({error:'Use a title of 1–80 characters'},{status:400});
