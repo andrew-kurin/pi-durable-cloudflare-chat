@@ -34,6 +34,6 @@ test('SSE partials, completed history, session switches and reload use the same 
   streams[0].onmessage({ data: JSON.stringify({ messages: saved, partial: '```\n<script>alert(1)', busy: true }) });
   assert.equal(w.document.querySelector('.partial pre code').textContent, '<script>alert(1)'); assert.equal(w.document.querySelectorAll('.message a').length, 1); assert.equal(w.document.querySelector('#messages script'), null);
   streams[0].onmessage({ data: JSON.stringify({ messages: [...saved, { role: 'assistant', text: '**Finished**' }], partial: '', busy: false }) }); assert.equal(w.document.querySelector('.partial'), null); assert.equal(w.document.querySelectorAll('.message strong').length, 2);
-  w.document.getElementById('sessions').value = '2'; w.document.getElementById('sessions').onchange(); streams[1].onmessage({ data: JSON.stringify({ messages: saved, partial: '', busy: false }) }); assert.equal(w.document.querySelector('.message a').textContent, 'Saved answer'); dom.window.close();
+  w.document.querySelector('[data-session-id="2"]').click(); streams[1].onmessage({ data: JSON.stringify({ messages: saved, partial: '', busy: false }) }); assert.equal(w.document.querySelector('.message a').textContent, 'Saved answer'); dom.window.close();
  }
 });

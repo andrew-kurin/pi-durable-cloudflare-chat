@@ -7,7 +7,7 @@ test('pending submissions preserve edited drafts and drafts in another conversat
   w.fetch=async(path:string)=>path.startsWith('/api/submit')?new Promise(r=>resolveSubmit=()=>r({ok:true,json:async()=>({accepted:true})})):{ok:true,json:async()=>path==='/api/sessions'?[{id:'1',title:'Intentional title'},{id:'2'}]:{connected:true,modelEnabled:true}};
   w.eval(script);await new Promise(r=>setTimeout(r,0));const input=w.document.getElementById('prompt');input.value='Original draft';input.dispatchEvent(new w.Event('input'));const submitted=w.document.getElementById('form').onsubmit({preventDefault(){}});
   assert.equal(w.document.getElementById('send').disabled,true);stream.onmessage({data:JSON.stringify({messages:[],partial:'',busy:false})});assert.equal(w.document.getElementById('send').disabled,true,'Idle snapshot cannot re-enable a pending POST');
-  if(change==='edited'){input.value='Newer draft';input.dispatchEvent(new w.Event('input'));}if(change==='switched'){w.document.getElementById('sessions').value='2';w.document.getElementById('sessions').onchange();input.value='Other conversation draft';input.dispatchEvent(new w.Event('input'));}
-  resolveSubmit();await submitted;assert.equal(input.value,change==='edited'?'Newer draft':change==='switched'?'Other conversation draft':'');assert.equal(w.document.getElementById('sessions').options[0].textContent,'Intentional title');dom.window.close();
+  if(change==='edited'){input.value='Newer draft';input.dispatchEvent(new w.Event('input'));}if(change==='switched'){w.document.querySelector('[data-session-id="2"]').click();input.value='Other conversation draft';input.dispatchEvent(new w.Event('input'));}
+  resolveSubmit();await submitted;assert.equal(input.value,change==='edited'?'Newer draft':change==='switched'?'Other conversation draft':'');assert.equal(w.document.querySelector('[data-session-id="1"]').textContent,'Intentional title');dom.window.close();
  }
 });
