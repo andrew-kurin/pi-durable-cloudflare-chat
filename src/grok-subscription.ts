@@ -21,13 +21,13 @@ export const GROK_CHECK_BUDGET={providerRequests:2,maxOutputTokensPerRequest:128
 const checking=new WeakSet<CredentialStorage>();
 const CHECK_KEY='grok-tool-check:v1';
 type HttpEvidence={request:number;status:number;timestamp:number;contentType?:string;cfRay?:string;requestId?:string};
-export type GrokCheckResult={status:'disabled'|'not_connected'|'unsupported_model'|'passed'|'failed'|'busy';providerRequests:number;toolCalls:number;http:HttpEvidence[]};
+export type GrokCheckResult={model?:string;status:'disabled'|'not_connected'|'unsupported_model'|'passed'|'failed'|'busy';providerRequests:number;toolCalls:number;http:HttpEvidence[]};
 /** Fixed fresh-context probe. No harness, workspace, history, shell, retries, or auto-login. */
 export async function runGrokToolCheck(models:Pick<Models,'getModel'|'streamSimple'>,credentials:Pick<CredentialStore,'read'>,modelId:string,options:{approved?:boolean;signal?:AbortSignal;storage?:CredentialStorage}={}):Promise<GrokCheckResult>{
  const report:GrokCheckResult={status:'disabled',providerRequests:0,toolCalls:0,http:[]};if(options.approved!==true||!options.storage)return report;
  const model=models.getModel('xai',modelId);if(!grokCatalog().some(m=>m.id===modelId)||!model||model.provider!=='xai'||model.api!=='openai-responses'||model.baseUrl!=='https://api.x.ai/v1'){report.status='unsupported_model';return report;}
  if((await credentials.read('xai'))?.type!=='oauth'){report.status='not_connected';return report;}
- const storage=options.storage;if(checking.has(storage)){report.status='busy';return report;}checking.add(storage);
+ report.model=modelId;const storage=options.storage;if(checking.has(storage)){report.status='busy';return report;}checking.add(storage);
  try{const prior=await storage.get<{state:'running'|'done';report:GrokCheckResult}>(CHECK_KEY);if(prior){checking.delete(storage);return prior.state==='done'?prior.report:{...prior.report,status:'failed'};}await storage.put(CHECK_KEY,{state:'running',report});}catch{checking.delete(storage);throw Error('Could not reserve fixed check');}
  const controller=new AbortController(),abort=()=>controller.abort();options.signal?.addEventListener('abort',abort,{once:true});if(options.signal?.aborted)abort();const timer=setTimeout(abort,GROK_CHECK_BUDGET.timeoutMs);
  const tool={name:'test_status',description:'Return a fixed test marker; no environment access.',parameters:Type.Object({}, {additionalProperties:false})};

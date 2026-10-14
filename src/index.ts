@@ -2,6 +2,8 @@ import {logSavedFailure,logTechnicalError,diagnoseSavedErrorRead} from './error-
 import { DurableObject } from 'cloudflare:workers';
 import { PiHarness } from 'agents/harness/pi';
 import { Lifecycle } from 'agents/lifecycle';
+import {BACKGROUND_CONTEXT} from '@earendil-works/chord/context';
+import {newChatModel} from './chat-model';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { createWorkerCodexProvider } from './oauth-loader';
 import { createRegistry, Harness } from '@earendil-works/pi-durable';
@@ -20,7 +22,7 @@ import {runSearchCheck,searchCheckStatus,previousSearchCheckStatus,runGithubChec
 import { createCredentialStore, startSubscriptionLogin, type SubscriptionLoginStatus } from './credentials';
 declare const PI_DEPLOYMENT_MODE: string;
 const deploymentMode = typeof PI_DEPLOYMENT_MODE === 'undefined' ? 'local' : PI_DEPLOYMENT_MODE;
-interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string;ENABLE_GROK_SUBSCRIPTION?:string; TAVILY_API_KEY?:string; ENABLE_WEB_SEARCH?:string; ENABLE_WEB_SEARCH_TEST?:string;ENABLE_WORKSPACE?:string;ENABLE_WORKSPACE_SMOKE?:string;WORKSPACE_REPOSITORY?:string;WORKSPACE_IMAGE?:string;Workspaces?:DurableObjectNamespace<TaskWorkspace> }
+interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string;ENABLE_GROK_SUBSCRIPTION?:string;GROK_CHAT_MODEL?:string; TAVILY_API_KEY?:string; ENABLE_WEB_SEARCH?:string; ENABLE_WEB_SEARCH_TEST?:string;ENABLE_WORKSPACE?:string;ENABLE_WORKSPACE_SMOKE?:string;WORKSPACE_REPOSITORY?:string;WORKSPACE_IMAGE?:string;Workspaces?:DurableObjectNamespace<TaskWorkspace> }
 export class Assistant extends DurableObject<Env> {
  private workspaceEnabled(){return this.env.ENABLE_WORKSPACE==='true'&&!!this.env.WORKSPACE_IMAGE&&!!this.env.Workspaces&&!!this.env.WORKSPACE_REPOSITORY&&/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(this.env.WORKSPACE_REPOSITORY)&&!this.env.WORKSPACE_REPOSITORY.split('/').some(x=>x==='.'||x==='..')}
  private async workspaceRequest(session:string,input:WorkspaceToolRequest){if(!this.workspaceEnabled())throw Error('Workspace disabled');const id=input.workspaceId??await this.ctx.storage.get<string>('workspace-session:'+session);if(!id)throw Error('Ask the owner to open a workspace first');const request={...input,workspaceId:id} as WorkspaceRequest;const owner=await this.ctx.storage.get<string>('workspace-owner:'+request.workspaceId);if(owner!==session)throw Error('Workspace is not approved for this conversation');return this.env.Workspaces!.getByName(request.workspaceId).request(request)}
@@ -31,11 +33,12 @@ export class Assistant extends DurableObject<Env> {
  private grokLoginActive=false;
  private grokLoginStatus:GrokLoginStatus={status:'disabled'};
  private grokModels(){const models=createModels({credentials:this.credentials,authContext:{env:async()=>undefined,fileExists:async()=>false}});models.setProvider(createWorkerGrokProvider());return models;}
+ private async sessionModel(sid:string){return (await (await this.harness.conversation(sid)).agent(BACKGROUND_CONTEXT)).model??{provider:'openai-codex',modelId:'gpt-6-sol'};}
  private activeStreams = 0;
  private streamStops=new Map<string,()=>Promise<void>>();
  private closedStreams=new Map<string,number>();
  private admission: Promise<unknown> = Promise.resolve();
- harness = new PiHarness({harness:({storage,context})=>{const registry=createRegistry();registry.install(delegation());if(this.workspaceEnabled())registry.install(workspaceTools({request:(session,r)=>this.workspaceRequest(session,r)}));registry.install(readTools(this.ctx.storage,this.env));const provider=createWorkerCodexProvider();this.models.setProvider(provider);return Harness.open(storage,{models:this.models,registry,settings:{compaction:{enabled:false},progress:{partialIntervalMs:250,outputIntervalMs:500},retry:{enabled:true,maxRetries:1,baseDelayMs:1000},stream:{transport:'sse',timeoutMs:120000,maxRetries:0}}},context);},defaults:{model:{provider:'openai-codex',id:'gpt-6-sol'},thinkingLevel:'low'}});
+ harness = new PiHarness({harness:({storage,context})=>{const registry=createRegistry();registry.install(delegation());if(this.workspaceEnabled())registry.install(workspaceTools({request:(session,r)=>this.workspaceRequest(session,r)}));registry.install(readTools(this.ctx.storage,this.env));const provider=createWorkerCodexProvider();this.models.setProvider(provider);this.models.setProvider(createWorkerGrokProvider());return Harness.open(storage,{models:this.models,registry,settings:{compaction:{enabled:false},progress:{partialIntervalMs:250,outputIntervalMs:500},retry:{enabled:true,maxRetries:1,baseDelayMs:1000},stream:{transport:'sse',timeoutMs:120000,maxRetries:0}}},context);},defaults:{model:{provider:'openai-codex',id:'gpt-6-sol'},thinkingLevel:'low'}});
  lifecycle = Lifecycle.install(this).use(this.harness);
  async fetch(request:Request):Promise<Response>{
   try{await authorize(request,this.env);}catch{return new Response('Forbidden',{status:403});}
@@ -70,7 +73,7 @@ export class Assistant extends DurableObject<Env> {
     this.ctx.storage.sql.exec('INSERT INTO app_grok_check_results (id,recorded_at,result) VALUES (?,?,?) ON CONFLICT(id) DO NOTHING','v1',Date.now(),JSON.stringify(result));}
     return Response.json(result);
    }
-   if(path==='/api/status'&&request.method==='GET')return Response.json({deploymentMode,modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId==='openai-codex'),login:this.loginStatus,webSearchEnabled:this.env.ENABLE_WEB_SEARCH==='true',searchKeyPresent:!!this.env.TAVILY_API_KEY,canCheckSearch:this.env.ENABLE_WEB_SEARCH_TEST==='true'&&this.env.ENABLE_WEB_SEARCH!=='true'&&!!this.env.TAVILY_API_KEY,searchCheck:await searchCheckStatus(this.ctx.storage),previousSearchCheck:await previousSearchCheckStatus(this.ctx.storage),githubCheck:await githubCheckStatus(this.ctx.storage),workspaceEnabled:this.workspaceEnabled(),workspaceRepository:this.workspaceEnabled()?this.env.WORKSPACE_REPOSITORY:undefined});
+   if(path==='/api/status'&&request.method==='GET'){const model=await this.sessionModel(sid);return Response.json({model,delegateModel:model.provider==='xai'?model:{provider:'openai-codex',modelId:'gpt-6-luna'},newChatModel:this.env.ENABLE_GROK_SUBSCRIPTION==='true'?newChatModel(this.env.GROK_CHAT_MODEL):{provider:'openai-codex',modelId:'gpt-6-sol'},deploymentMode,modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:model.provider==='openai-codex'&&this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId===model.provider&&x.type==='oauth'),login:this.loginStatus,webSearchEnabled:this.env.ENABLE_WEB_SEARCH==='true',searchKeyPresent:!!this.env.TAVILY_API_KEY,canCheckSearch:this.env.ENABLE_WEB_SEARCH_TEST==='true'&&this.env.ENABLE_WEB_SEARCH!=='true'&&!!this.env.TAVILY_API_KEY,searchCheck:await searchCheckStatus(this.ctx.storage),previousSearchCheck:await previousSearchCheckStatus(this.ctx.storage),githubCheck:await githubCheckStatus(this.ctx.storage),workspaceEnabled:this.workspaceEnabled(),workspaceRepository:this.workspaceEnabled()?this.env.WORKSPACE_REPOSITORY:undefined});}
    if(path==='/api/workspaces'&&request.method==='GET'){
     if(!this.workspaceEnabled())return Response.json({error:'Workspace disabled'},{status:403});
     return Response.json({workspaceId:await this.ctx.storage.get<string>('workspace-session:'+sid)});
@@ -124,11 +127,11 @@ export class Assistant extends DurableObject<Env> {
    }
    if(path==='/api/sessions'&&request.method==='POST'){
     if((await this.harness.sessions.list()).length>=100)return Response.json({error:'Session limit reached'},{status:429});
-    const s=await this.harness.sessions.create();return Response.json({id:s.id});
+    const model=this.env.ENABLE_GROK_SUBSCRIPTION==='true'?newChatModel(this.env.GROK_CHAT_MODEL):{provider:'openai-codex',modelId:'gpt-6-sol'};if(model.provider==='xai'&&!(await this.credentials.list()).some(x=>x.providerId==='xai'&&x.type==='oauth'))return Response.json({error:'Connect Grok before creating a new chat'},{status:503});const s=await(await this.harness.pi()).createConversation({ownership:{kind:'ownerless'},agent:{model,thinkingLevel:'low'}},BACKGROUND_CONTEXT);return Response.json({id:String(s.id),model});
    }
    if(path==='/api/submit'&&request.method==='POST'){
     if(this.env.ENABLE_MODEL!=='true')return Response.json({error:'Model access is not enabled yet'},{status:503});
-    if(!(await this.credentials.list()).some(x=>x.providerId==='openai-codex'))return Response.json({error:'Connect your subscription first'},{status:503});
+    const model=await this.sessionModel(sid);if(model.provider==='xai'&&this.env.ENABLE_GROK_SUBSCRIPTION!=='true')return Response.json({error:'Grok access is disabled'},{status:503});if(!(await this.credentials.list()).some(x=>x.providerId===model.provider&&x.type==='oauth'))return Response.json({error:'Connect your subscription first'},{status:503});
     const raw=await request.text();if(raw.length>20000)return Response.json({error:'Message too long'},{status:413});
     const b=JSON.parse(raw);if(typeof b.text!=='string'||!b.text.trim()||b.text.length>12000||typeof b.operationId!=='string'||!/^[-a-zA-Z0-9]{8,80}$/.test(b.operationId))return Response.json({error:'Invalid message'},{status:400});
     const key=`admission:${sid}:${b.operationId}`;
