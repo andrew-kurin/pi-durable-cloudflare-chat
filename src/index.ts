@@ -14,12 +14,13 @@ import { readTools } from './read-tools';
 import {workspaceTools,type WorkspaceRequest,type WorkspaceToolRequest} from './workspace-tools';
 import {TaskWorkspace} from './workspace-container';
 import workspaceSmoke from './workspace-smoke';
+import {createWorkerGrokProvider,grokCatalog,startGrokSubscriptionLogin,runGrokToolCheck,GROK_CHECK_BUDGET,type GrokLoginStatus,type GrokCheckResult} from './grok-subscription';
 export {TaskWorkspace};
 import {runSearchCheck,searchCheckStatus,previousSearchCheckStatus,runGithubCheck,githubCheckStatus} from './search-check';
 import { createCredentialStore, startSubscriptionLogin, type SubscriptionLoginStatus } from './credentials';
 declare const PI_DEPLOYMENT_MODE: string;
 const deploymentMode = typeof PI_DEPLOYMENT_MODE === 'undefined' ? 'local' : PI_DEPLOYMENT_MODE;
-interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string; TAVILY_API_KEY?:string; ENABLE_WEB_SEARCH?:string; ENABLE_WEB_SEARCH_TEST?:string;ENABLE_WORKSPACE?:string;ENABLE_WORKSPACE_SMOKE?:string;WORKSPACE_REPOSITORY?:string;WORKSPACE_IMAGE?:string;Workspaces?:DurableObjectNamespace<TaskWorkspace> }
+interface Env extends AccessConfig { ASSETS: Fetcher; Assistant: DurableObjectNamespace<Assistant>; CREDENTIAL_ENCRYPTION_KEY: string; ENABLE_MODEL: string; ENABLE_SUBSCRIPTION_LOGIN: string;ENABLE_GROK_SUBSCRIPTION?:string; TAVILY_API_KEY?:string; ENABLE_WEB_SEARCH?:string; ENABLE_WEB_SEARCH_TEST?:string;ENABLE_WORKSPACE?:string;ENABLE_WORKSPACE_SMOKE?:string;WORKSPACE_REPOSITORY?:string;WORKSPACE_IMAGE?:string;Workspaces?:DurableObjectNamespace<TaskWorkspace> }
 export class Assistant extends DurableObject<Env> {
  private workspaceEnabled(){return this.env.ENABLE_WORKSPACE==='true'&&!!this.env.WORKSPACE_IMAGE&&!!this.env.Workspaces&&!!this.env.WORKSPACE_REPOSITORY&&/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(this.env.WORKSPACE_REPOSITORY)&&!this.env.WORKSPACE_REPOSITORY.split('/').some(x=>x==='.'||x==='..')}
  private async workspaceRequest(session:string,input:WorkspaceToolRequest){if(!this.workspaceEnabled())throw Error('Workspace disabled');const id=input.workspaceId??await this.ctx.storage.get<string>('workspace-session:'+session);if(!id)throw Error('Ask the owner to open a workspace first');const request={...input,workspaceId:id} as WorkspaceRequest;const owner=await this.ctx.storage.get<string>('workspace-owner:'+request.workspaceId);if(owner!==session)throw Error('Workspace is not approved for this conversation');return this.env.Workspaces!.getByName(request.workspaceId).request(request)}
@@ -27,6 +28,9 @@ export class Assistant extends DurableObject<Env> {
  private models = guardModels(createModels({credentials:this.credentials,authContext:{env:async()=>undefined,fileExists:async()=>false}}),async()=>{if(this.env.ENABLE_MODEL!=='true')throw new Error('Model disabled');await this.ctx.storage.transaction(async tx=>{const day=new Date().toISOString().slice(0,10);const count=await tx.get<{day:string,count:number}>('model-quota');const used=count?.day===day?count.count:0;if(used>=150)throw new Error('Daily model request limit');await tx.put('model-quota',{day,count:used+1});});});
  private loginStatus: SubscriptionLoginStatus = {status:'disabled'};
  private loginActive = false;
+ private grokLoginActive=false;
+ private grokLoginStatus:GrokLoginStatus={status:'disabled'};
+ private grokModels(){const models=createModels({credentials:this.credentials,authContext:{env:async()=>undefined,fileExists:async()=>false}});models.setProvider(createWorkerGrokProvider());return models;}
  private activeStreams = 0;
  private streamStops=new Map<string,()=>Promise<void>>();
  private closedStreams=new Map<string,number>();
@@ -45,6 +49,27 @@ export class Assistant extends DurableObject<Env> {
   const url=new URL(request.url);const path=url.pathname;const sid=url.searchParams.get('session')??'1';
   if(!/^\d{1,12}$/.test(sid))return Response.json({error:'Invalid session'},{status:400});
   try{
+   if(path.startsWith('/api/grok/')){
+    if(this.env.ENABLE_GROK_SUBSCRIPTION!=='true')return Response.json({error:'Grok setup is not enabled'},{status:404});
+    if(path==='/api/grok/status'&&request.method==='GET')return Response.json({connected:(await this.credentials.list()).some(c=>c.providerId==='xai'&&c.type==='oauth'),login:this.grokLoginStatus,models:grokCatalog(),budget:GROK_CHECK_BUDGET,check:await this.ctx.storage.get<{state:string;report:GrokCheckResult}>('grok-tool-check:v1')??null});
+    if(request.method!=='POST'||!['/api/grok/login','/api/grok/check'].includes(path))return Response.json({error:'Not found'},{status:404});
+    const raw=await request.text();if(raw.length>100)return Response.json({error:'Invalid setup action'},{status:400});let body:unknown;try{body=JSON.parse(raw);}catch{return Response.json({error:'Invalid setup action'},{status:400});}
+    if(!body||typeof body!=='object'||Array.isArray(body))return Response.json({error:'Invalid setup action'},{status:400});
+    if(path==='/api/grok/login'){
+     if(Object.keys(body).length!==0)return Response.json({error:'Invalid setup action'},{status:400});
+     if((await this.credentials.list()).some(c=>c.providerId==='xai'))return Response.json({error:'Grok is already configured'},{status:409});if(this.grokLoginActive)return Response.json({error:'Grok sign-in is already running'},{status:409});
+     this.grokLoginActive=true;const abort=new AbortController();const onAbort=()=>abort.abort();request.signal.addEventListener('abort',onAbort,{once:true});if(request.signal.aborted)onAbort();
+     const stream=new ReadableStream<Uint8Array>({start:controller=>{const job=startGrokSubscriptionLogin(this.grokModels(),this.ctx.storage,status=>{this.grokLoginStatus=status;try{controller.enqueue(new TextEncoder().encode(JSON.stringify(status)+'\n'));}catch{abort.abort();}},{enabled:true,signal:abort.signal}).finally(()=>{this.grokLoginActive=false;request.signal.removeEventListener('abort',onAbort);try{controller.close();}catch{}});this.ctx.waitUntil(job);},cancel:()=>abort.abort()});
+     return new Response(stream,{headers:{'Content-Type':'application/x-ndjson','Cache-Control':'no-store'}});
+    }
+    const action=body as Record<string,unknown>;if(Object.keys(action).length!==2||action.approved!==true||typeof action.model!=='string'||!grokCatalog().some(m=>m.id===action.model))return Response.json({error:'Approve the fixed test and select a listed model'},{status:400});
+    if((await this.harness.sessions.list()).some(session=>session.busy))return Response.json({error:'Wait for the current chat request to finish'},{status:409});
+    const result=await runGrokToolCheck(this.grokModels(),this.credentials,action.model,{approved:true,storage:this.ctx.storage,signal:request.signal});
+    // Non-secret terminal evidence is SQL-readable; credential KV is never exported.
+    if(result.status==='passed'||result.status==='failed'){this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS app_grok_check_results (id TEXT PRIMARY KEY, recorded_at INTEGER NOT NULL, result TEXT NOT NULL CHECK(json_valid(result)))');
+    this.ctx.storage.sql.exec('INSERT INTO app_grok_check_results (id,recorded_at,result) VALUES (?,?,?) ON CONFLICT(id) DO NOTHING','v1',Date.now(),JSON.stringify(result));}
+    return Response.json(result);
+   }
    if(path==='/api/status'&&request.method==='GET')return Response.json({deploymentMode,modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId==='openai-codex'),login:this.loginStatus,webSearchEnabled:this.env.ENABLE_WEB_SEARCH==='true',searchKeyPresent:!!this.env.TAVILY_API_KEY,canCheckSearch:this.env.ENABLE_WEB_SEARCH_TEST==='true'&&this.env.ENABLE_WEB_SEARCH!=='true'&&!!this.env.TAVILY_API_KEY,searchCheck:await searchCheckStatus(this.ctx.storage),previousSearchCheck:await previousSearchCheckStatus(this.ctx.storage),githubCheck:await githubCheckStatus(this.ctx.storage),workspaceEnabled:this.workspaceEnabled(),workspaceRepository:this.workspaceEnabled()?this.env.WORKSPACE_REPOSITORY:undefined});
    if(path==='/api/workspaces'&&request.method==='GET'){
     if(!this.workspaceEnabled())return Response.json({error:'Workspace disabled'},{status:403});
@@ -167,6 +192,7 @@ export class Assistant extends DurableObject<Env> {
 export default {async fetch(request:Request,env:Env):Promise<Response>{
  try{await authorize(request,env);}catch{return secured(new Response('Private chat. Cloudflare Access sign-in and owner configuration are required.',{status:403}));}
  const url=new URL(request.url);
+ if(url.pathname==='/grok-setup'||url.pathname==='/grok-setup.html'||url.pathname==='/grok-setup.js'){if(env.ENABLE_GROK_SUBSCRIPTION!=='true')return secured(new Response('Not found',{status:404}));if(url.pathname==='/grok-setup'){url.pathname='/grok-setup.html';request=new Request(url,request);}}
  if(url.pathname==='/workspace-smoke'||url.pathname==='/smoke.js'||url.pathname.startsWith('/api/smoke')){
   if(env.ENABLE_WORKSPACE_SMOKE!=='true')return secured(new Response('Not found',{status:404}));
   if(url.pathname==='/workspace-smoke')url.pathname='/';

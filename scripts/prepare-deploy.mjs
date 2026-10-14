@@ -16,6 +16,7 @@ if (!['production','staging'].includes(target)) throw new Error('Invalid deploym
 const workerName = target === 'staging' ? 'pi-private-chat-workspace-staging' : 'pi-private-chat';
 const modelEnabled = target === 'staging' ? 'false' : flag('ENABLE_MODEL');
 const loginEnabled = target === 'staging' ? 'false' : flag('ENABLE_SUBSCRIPTION_LOGIN');
+const grokEnabled = target === 'staging' ? 'false' : flag('ENABLE_GROK_SUBSCRIPTION');
 const webSearchEnabled = target === 'staging' ? 'false' : flag('ENABLE_WEB_SEARCH');
 const webSearchTest = target === 'staging' ? 'false' : flag('ENABLE_WEB_SEARCH_TEST');
 const workspaceProvisioned = flag('PROVISION_WORKSPACE');
@@ -83,6 +84,7 @@ if (target === 'staging') config.observability = { enabled: false };
 const mode = modelEnabled === 'true' ? 'chat' : loginEnabled === 'true' ? 'setup' : 'off';
 config.define = { ...(config.define || {}), PI_DEPLOYMENT_MODE: JSON.stringify(`${mode}:web-${webSearchEnabled}:test-${webSearchTest}:origin-${app.hostname}`) };
 if (workspaceProvisioned === 'true') config.define.PI_DEPLOYMENT_MODE = JSON.stringify(`${mode}:web-${webSearchEnabled}:test-${webSearchTest}:origin-${app.hostname}:workspace-${workspaceEnabled}:smoke-${workspaceSmoke}:${image}:${repository}`);
+if(grokEnabled==='true')config.define.PI_DEPLOYMENT_MODE=JSON.stringify(JSON.parse(config.define.PI_DEPLOYMENT_MODE)+':grok-true');
 config.vars = {
   ACCESS_TEAM_DOMAIN: teamDomain,
   ACCESS_AUD: aud,
@@ -90,6 +92,7 @@ config.vars = {
   APP_ORIGIN: origin,
   ENABLE_MODEL: modelEnabled,
   ENABLE_SUBSCRIPTION_LOGIN: loginEnabled,
+  ENABLE_GROK_SUBSCRIPTION: grokEnabled,
   ENABLE_WEB_SEARCH: webSearchEnabled,
   ENABLE_WEB_SEARCH_TEST: webSearchTest,
   ENABLE_WORKSPACE: workspaceEnabled,
