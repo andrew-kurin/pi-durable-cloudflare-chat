@@ -64,7 +64,11 @@ export class Assistant extends DurableObject<Env> {
     }
     const action=body as Record<string,unknown>;if(Object.keys(action).length!==2||action.approved!==true||typeof action.model!=='string'||!grokCatalog().some(m=>m.id===action.model))return Response.json({error:'Approve the fixed test and select a listed model'},{status:400});
     if((await this.harness.sessions.list()).some(session=>session.busy))return Response.json({error:'Wait for the current chat request to finish'},{status:409});
-    return Response.json(await runGrokToolCheck(this.grokModels(),this.credentials,action.model,{approved:true,storage:this.ctx.storage,signal:request.signal}));
+    const result=await runGrokToolCheck(this.grokModels(),this.credentials,action.model,{approved:true,storage:this.ctx.storage,signal:request.signal});
+    // Non-secret terminal evidence is SQL-readable; credential KV is never exported.
+    if(result.status==='passed'||result.status==='failed'){this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS app_grok_check_results (id TEXT PRIMARY KEY, recorded_at INTEGER NOT NULL, result TEXT NOT NULL CHECK(json_valid(result)))');
+    this.ctx.storage.sql.exec('INSERT INTO app_grok_check_results (id,recorded_at,result) VALUES (?,?,?) ON CONFLICT(id) DO NOTHING','v1',Date.now(),JSON.stringify(result));}
+    return Response.json(result);
    }
    if(path==='/api/status'&&request.method==='GET')return Response.json({deploymentMode,modelEnabled:this.env.ENABLE_MODEL==='true',canLogin:this.env.ENABLE_SUBSCRIPTION_LOGIN==='true',connected:(await this.credentials.list()).some(x=>x.providerId==='openai-codex'),login:this.loginStatus,webSearchEnabled:this.env.ENABLE_WEB_SEARCH==='true',searchKeyPresent:!!this.env.TAVILY_API_KEY,canCheckSearch:this.env.ENABLE_WEB_SEARCH_TEST==='true'&&this.env.ENABLE_WEB_SEARCH!=='true'&&!!this.env.TAVILY_API_KEY,searchCheck:await searchCheckStatus(this.ctx.storage),previousSearchCheck:await previousSearchCheckStatus(this.ctx.storage),githubCheck:await githubCheckStatus(this.ctx.storage),workspaceEnabled:this.workspaceEnabled(),workspaceRepository:this.workspaceEnabled()?this.env.WORKSPACE_REPOSITORY:undefined});
    if(path==='/api/workspaces'&&request.method==='GET'){
