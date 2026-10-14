@@ -75,3 +75,7 @@ test('production deployments preserve owner-enabled retained invocation logs whi
  for(const flags of [{},{...workspaceSettings,ENABLE_WORKSPACE:'true',ENABLE_WORKSPACE_SMOKE:'false'}]){const r=prepare(flags);assert.equal(r.status,0,r.error);assert.deepEqual(r.config.observability.logs,{enabled:true,head_sampling_rate:1,invocation_logs:true,persist:true});assert.deepEqual(r.config.observability.traces,{enabled:false,head_sampling_rate:1,persist:true});assert.deepEqual(r.config.observability.issues,{enabled:false});assert.equal(r.config.observability.issue_detection,undefined);}
  const staging=prepare({...workspaceSettings,DEPLOY_TARGET:'staging',APP_ORIGIN:'https://pi-private-chat-workspace-staging.synthetic.workers.dev',ENABLE_WORKSPACE:'true'});assert.deepEqual(staging.config.observability,{enabled:false});
 });
+test('Grok is a separate opt-in and staging keeps all subscription setup off',()=>{
+ assert.equal(prepare({}).config.vars.ENABLE_GROK_SUBSCRIPTION,'false');assert.equal(prepare({ENABLE_GROK_SUBSCRIPTION:'true'}).config.vars.ENABLE_GROK_SUBSCRIPTION,'true');assert.notEqual(prepare({}).config.define.PI_DEPLOYMENT_MODE,prepare({ENABLE_GROK_SUBSCRIPTION:'true'}).config.define.PI_DEPLOYMENT_MODE);
+ const staging=prepare({...workspaceSettings,DEPLOY_TARGET:'staging',APP_ORIGIN:'https://pi-private-chat-workspace-staging.synthetic.workers.dev',ENABLE_WORKSPACE:'true',ENABLE_GROK_SUBSCRIPTION:'true'});assert.equal(staging.status,0,staging.error);assert.equal(staging.config.vars.ENABLE_GROK_SUBSCRIPTION,'false');
+});
