@@ -1,3 +1,4 @@
+import './build-icons.mjs';
 import { build } from 'esbuild';
 import { readFile, writeFile } from 'node:fs/promises';
 const license = await readFile('node_modules/marked/LICENSE', 'utf8');

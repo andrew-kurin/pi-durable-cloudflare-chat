@@ -1,0 +1,3 @@
+Lucide 1.57.0, pinned upstream commit dab294f313897bacaa968b725b3259fa37c17bd1. Original SVGs from https://github.com/lucide-icons/lucide/tree/dab294f313897bacaa968b725b3259fa37c17bd1/icons . Full upstream license is preserved in LICENSE, including Feather-derived notices.
+
+Use the existing outline set with a 24px viewBox and 2px currentColor stroke. Toolbar glyphs render at 20px within existing 44px controls; text actions use 16px. The generated inline sprite is maintained by scripts/build-icons.mjs and checked during check:ui. Only vendored icons are included; there is no runtime dependency or CDN. Refresh uses refresh-cw for both history and workspace.
