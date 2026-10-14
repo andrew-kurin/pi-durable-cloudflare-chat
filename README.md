@@ -4,7 +4,7 @@ A small, owner-only mobile web chat using Cloudflare's official PiHarness integr
 
 ## What is implemented
 
-- Sol orchestrator (`gpt-6-sol`, subscription provider) with optional durable Luna (`gpt-6-luna`) delegation. Sol has four bounded read-only public-source tools; Luna remains tool-less. No write/action tools.
+- New chats use the connected Grok subscription model `grok-4.7` when Grok is enabled; optional tool-less delegates use that same model. Existing chats retain their persisted model selections, including Codex Sol with Luna delegation. Provider-aware connection and model labels appear in the chat UI. No conversation history or credentials are migrated.
 - Durable Object SQLite conversations and official Lifecycle alarm recovery.
 - HTTP/SSE streaming, fresh snapshot on reconnect, persistent selectable chats. Closing the tab does not cancel the run; Stop explicitly aborts it.
 - Every asset and API request must pass Access JWT signature, issuer, audience, expiry and exact owner-email checks. Mutations require same-origin JSON. Missing configuration denies access.
@@ -90,3 +90,5 @@ The composer starts at one line and grows with drafts to a bounded height. Priva
 ## Disposable project workspace (disabled)
 
 The optional trusted-project workspace V1 keeps Sol and credentials in the app and delegates typed file/process operations to a separate task-scoped Sandbox DO. It remains disabled in the existing production configuration. See [WORKSPACE.md](WORKSPACE.md) for owner controls, generous independent deadlines, cancellation/export behavior and explicit local-versus-Cloudflare verification limits. Image publication, provisioning and activation require separate approval.
+
+Grok new-chat integration: `GROK_CHAT_MODEL` can select another ID from the pinned xAI catalog; the default is `grok-4.7`. With Grok disabled, new chats retain the Codex default. With Grok enabled but disconnected, new chat creation requires connecting Grok and does not silently fall back to Codex. The normal harness uses the OAuth-only Worker provider and encrypted credential refresh. Existing bounded setup-test evidence remains immutable; future newly reserved reports record the selected model.
