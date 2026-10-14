@@ -192,7 +192,7 @@ export class Assistant extends DurableObject<Env> {
 export default {async fetch(request:Request,env:Env):Promise<Response>{
  try{await authorize(request,env);}catch{return secured(new Response('Private chat. Cloudflare Access sign-in and owner configuration are required.',{status:403}));}
  const url=new URL(request.url);
- if(url.pathname==='/grok-setup'||url.pathname==='/grok-setup.html'||url.pathname==='/grok-setup.js'){if(env.ENABLE_GROK_SUBSCRIPTION!=='true')return secured(new Response('Not found',{status:404}));if(url.pathname==='/grok-setup'){url.pathname='/grok-setup.html';request=new Request(url,request);}}
+ if(url.pathname==='/grok-setup'||url.pathname==='/grok-setup.html'||url.pathname==='/grok-setup.js'){if(env.ENABLE_GROK_SUBSCRIPTION!=='true')return secured(new Response('Not found',{status:404}));}
  if(url.pathname==='/workspace-smoke'||url.pathname==='/smoke.js'||url.pathname.startsWith('/api/smoke')){
   if(env.ENABLE_WORKSPACE_SMOKE!=='true')return secured(new Response('Not found',{status:404}));
   if(url.pathname==='/workspace-smoke')url.pathname='/';
