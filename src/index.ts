@@ -134,7 +134,7 @@ export class Assistant extends DurableObject<Env> {
     await this.ctx.storage.put(`chat-title:${sid}`,b.title.trim());return Response.json({title:b.title.trim()});
    }
    if(path==='/api/sessions'&&request.method==='POST'){
-    if((await this.harness.sessions.list()).length>=100)return Response.json({error:'Session limit reached'},{status:429});
+    const active=await Promise.all((await this.chatSessions()).map(async row=>!(await this.ctx.storage.get<number>('chat-deleted:'+row.id))));if(active.filter(Boolean).length>=100)return Response.json({error:'Active chat limit of 100 reached'},{status:429});
     const model=this.env.ENABLE_GROK_SUBSCRIPTION==='true'?newChatModel(this.env.GROK_CHAT_MODEL):{provider:'openai-codex',modelId:'gpt-6-sol'};if(model.provider==='xai'&&!(await this.credentials.list()).some(x=>x.providerId==='xai'&&x.type==='oauth'))return Response.json({error:'Connect Grok before creating a new chat'},{status:503});const s=await(await this.harness.pi()).createConversation({ownership:{kind:'ownerless'},agent:{model,thinkingLevel:'low'}},BACKGROUND_CONTEXT);return Response.json({id:String(s.id),model});
    }
    if(path==='/api/submit'&&request.method==='POST'){
