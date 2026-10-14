@@ -39,5 +39,7 @@ window.addEventListener('pagehide',()=>stream?.close());window.addEventListener(
 
 function closeInfo(){ $('chat-info').open=false; }
 document.addEventListener('click',event=>{if(!$('chat-info').contains(event.target))closeInfo();});document.addEventListener('keydown',event=>{if(event.key==='Escape'&&$('chat-info').open){closeInfo();$('chat-info').querySelector('summary').focus();}});window.addEventListener('popstate',closeInfo);window.addEventListener('pagehide',closeInfo);
-const viewport=window.visualViewport;if(viewport){const fit=()=>document.documentElement.style.setProperty('--visible-height',viewport.height+'px');viewport.addEventListener('resize',fit);fit();}
+// iOS can pan the visual viewport after shrinking it for the keyboard.
+// Keep the shell in that viewport; scrolling belongs to history, not the page.
+const viewport=window.visualViewport;if(viewport){let frame;const fit=()=>{frame=undefined;if(viewport.scale!==1)return;document.documentElement.style.setProperty('--visible-height',viewport.height+'px');document.documentElement.style.setProperty('--visible-top',(viewport.offsetTop||0)+'px');};const schedule=()=>{if(frame===undefined)frame=requestAnimationFrame(fit);};viewport.addEventListener('resize',schedule);viewport.addEventListener('scroll',schedule);$('prompt').addEventListener('focus',schedule);window.addEventListener('pageshow',schedule);fit();}
 controls();

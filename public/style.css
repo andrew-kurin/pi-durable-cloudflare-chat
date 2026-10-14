@@ -36,3 +36,6 @@ header{position:relative;gap:4px;padding:0;flex:none}header .orb{width:30px;heig
 .interrupted{border:1px solid #d7bda8;background:#fcf6ee}.status-action{margin:4px 0;font-size:12px;min-height:44px}.response-diagnostic{font-size:12px;color:#5f6657}.response-diagnostic>summary{min-height:44px;cursor:pointer;display:flex;align-items:center}.response-diagnostic>summary::before{content:'▸';margin-right:6px}.response-diagnostic[open]>summary::before{content:'▾'}.response-diagnostic p{margin:0 0 7px}.response-diagnostic summary::-webkit-details-marker{display:none}
 @media(min-width:700px){main{padding:20px 24px max(16px,env(safe-area-inset-bottom))}header{gap:6px}header nav select{font-size:15px}.message{max-width:90%}#form{padding:8px 10px 8px 14px}}
 @media(max-height:500px){#history-status{display:none}.workspace-body{max-height:24dvh}#form textarea{max-height:80px}#chat-info>div{max-height:calc(var(--visible-height,100dvh) - 150px)}}
+
+/* Prevent Safari focus scrolling the document outside the keyboard viewport. */
+html,body{height:100%;overflow:hidden;overscroll-behavior-y:none}main{position:fixed;top:var(--visible-top,0px);left:50%;transform:translateX(-50%)}
