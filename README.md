@@ -100,3 +100,11 @@ Delete moves a top-level chat to Recently deleted by adding a timestamp marker. 
 ## UI icons
 
 The chat, history, workspace and diagnostic controls use a small vendored subset of [Lucide](https://lucide.dev/guide/lucide), pinned to 1.57.0 (`dab294f313897bacaa968b725b3259fa37c17bd1`). Both refresh controls use [refresh-cw](https://lucide.dev/icons/refresh-cw). Original SVGs and the complete ISC/Feather MIT notices are in `vendor/lucide`; `build:ui` generates the inline sprite and `check:ui` checks it. No runtime CDN or icon dependency is used. Icons are decorative; controls retain labels, focus styling, touch targets and reduced-motion loading feedback.
+
+## Internal ownership boundaries
+
+`Assistant` composes HTTP validation, authentication, admission and the Pi runtime. `ChatCatalog` owns ownerless top-level chat membership, titles, tombstones and the active-chat creation limit. `WorkspaceCoordinator` owns chat/workspace identity mappings and launch eligibility; `WorkspaceController` and its adapter retain execution, journals, deadlines, alarms and cleanup. `HistoryFeed` owns history subscriptions, stream limits, close-before-open markers and lease cleanup; `ChatProjection` remains a pure event projection.
+
+Existing durable keys and namespaces are unchanged. Catalog mutations and workspace opening must retain the Assistant POST admission queue. Workspace cancel/extend and history close must bypass that queue so they can interrupt slow setup. Restore remains allowed above the new-chat creation cap. Chat APIs now consistently reject missing and delegated conversation IDs rather than applying weaker parent-only checks in selected routes.
+
+Projection messages add a safe `failure` object (`kind`, classified diagnostic fields, recovery action). The browser prefers it for recovery UI; legacy human-readable error fields remain compatible with older clients and saved-history renderers. Raw provider errors are not part of this DTO. Workspace page restoration restarts one polling timer and performs a refresh. Malformed/non-object JSON requests return 400 rather than unexpected-failure 500.

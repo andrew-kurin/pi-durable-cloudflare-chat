@@ -28,3 +28,10 @@ test('polling during slow export does not discard its saved download link',async
  const api=async(path:string,body:any)=>{if(body?.action==='export')return new Promise(resolve=>release=()=>resolve({url:'/saved-artifact'}));if(path==='/api/workspaces?session=1')return {workspaceId:id};return ready};
  const panel=workspacePanel({document:d,api,currentSession:()=> '1'});try{await panel.configure({workspaceEnabled:true,workspaceRepository:'owner/project'});const exporting=(d.getElementById('workspace-export') as any).onclick();await new Promise(r=>setTimeout(r,0));poll();await new Promise(r=>setTimeout(r,0));release();await exporting;assert.equal(d.getElementById('workspace-artifact')!.hidden,false);assert.equal(d.getElementById('workspace-artifact')!.getAttribute('href'),'/saved-artifact');}finally{dom.window.dispatchEvent(new dom.window.Event('pagehide'));dom.window.close()}
 });
+
+test('cached page restoration resumes one workspace polling timer and refreshes immediately',async()=>{
+ const dom=new JSDOM(await readFile('public/index.html','utf8'),{url:'https://chat.example.test'});const w=dom.window;const timers=new Map<number,()=>void>();let next=0,reads=0;
+ w.setInterval=((fn:()=>void)=>{timers.set(++next,fn);return next;}) as any;w.clearInterval=((id:number)=>timers.delete(id)) as any;
+ const panel=workspacePanel({document:w.document,api:async()=>{reads++;return {};},currentSession:()=> '1'});
+ try{await panel.configure({workspaceEnabled:true});assert.equal(timers.size,1);w.dispatchEvent(new w.PageTransitionEvent('pagehide',{persisted:true}));assert.equal(timers.size,0);const before=reads;w.dispatchEvent(new w.PageTransitionEvent('pageshow',{persisted:true}));await new Promise(r=>setTimeout(r,0));assert.equal(timers.size,1);assert.ok(reads>before);w.dispatchEvent(new w.PageTransitionEvent('pageshow',{persisted:true}));assert.equal(timers.size,1);}finally{w.dispatchEvent(new w.Event('pagehide'));dom.window.close();}
+});
