@@ -1,3 +1,5 @@
+import { CODEX_CHAT_MODEL } from "./chat-model";
+import { ProviderSessions, createChatModels } from "./provider-sessions";
 import { HistoryFeed } from "./history-feed";
 import { WorkspaceCoordinator } from "./workspace-coordinator";
 import { ChatCatalog } from "./chat-catalog";
@@ -7,9 +9,6 @@ import { DurableObject } from "cloudflare:workers";
 import { PiHarness } from "agents/harness/pi";
 import { Lifecycle } from "agents/lifecycle";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { newChatModel } from "./chat-model";
-import { createModels } from "@earendil-works/pi-ai/models";
-import { createWorkerCodexProvider } from "./oauth-loader";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { authorize, secured, type AccessConfig } from "./auth";
 import { guardModels } from "./model-guard";
@@ -18,15 +17,7 @@ import { readTools } from "./read-tools";
 import { workspaceTools } from "./workspace-tools";
 import { TaskWorkspace } from "./workspace-container";
 import workspaceSmoke from "./workspace-smoke";
-import {
-  createWorkerGrokProvider,
-  grokCatalog,
-  startGrokSubscriptionLogin,
-  runGrokToolCheck,
-  GROK_CHECK_BUDGET,
-  type GrokLoginStatus,
-  type GrokCheckResult,
-} from "./grok-subscription";
+import { grokCatalog } from "./grok-subscription";
 export { TaskWorkspace };
 import {
   runSearchCheck,
@@ -35,11 +26,7 @@ import {
   runGithubCheck,
   githubCheckStatus,
 } from "./search-check";
-import {
-  createCredentialStore,
-  startSubscriptionLogin,
-  type SubscriptionLoginStatus,
-} from "./credentials";
+import { createCredentialStore } from "./credentials";
 declare const PI_DEPLOYMENT_MODE: string;
 const deploymentMode =
   typeof PI_DEPLOYMENT_MODE === "undefined" ? "local" : PI_DEPLOYMENT_MODE;
@@ -73,46 +60,27 @@ export class Assistant extends DurableObject<Env> {
     this.ctx.storage,
     this.env.CREDENTIAL_ENCRYPTION_KEY,
   );
-  private models = guardModels(
-    createModels({
-      credentials: this.credentials,
-      authContext: {
-        env: async () => undefined,
-        fileExists: async () => false,
-      },
-    }),
-    async () => {
-      if (this.env.ENABLE_MODEL !== "true") throw new Error("Model disabled");
-      await this.ctx.storage.transaction(async (tx) => {
-        const day = new Date().toISOString().slice(0, 10);
-        const count = await tx.get<{ day: string; count: number }>(
-          "model-quota",
-        );
-        const used = count?.day === day ? count.count : 0;
-        if (used >= 150) throw new Error("Daily model request limit");
-        await tx.put("model-quota", { day, count: used + 1 });
-      });
-    },
-  );
-  private loginStatus: SubscriptionLoginStatus = { status: "disabled" };
-  private loginActive = false;
-  private grokLoginActive = false;
-  private grokLoginStatus: GrokLoginStatus = { status: "disabled" };
-  private grokModels() {
-    const models = createModels({
-      credentials: this.credentials,
-      authContext: {
-        env: async () => undefined,
-        fileExists: async () => false,
-      },
+  private models = guardModels(createChatModels(this.credentials), async () => {
+    if (this.env.ENABLE_MODEL !== "true") throw new Error("Model disabled");
+    await this.ctx.storage.transaction(async (tx) => {
+      const day = new Date().toISOString().slice(0, 10);
+      const count = await tx.get<{ day: string; count: number }>("model-quota");
+      const used = count?.day === day ? count.count : 0;
+      if (used >= 150) throw new Error("Daily model request limit");
+      await tx.put("model-quota", { day, count: used + 1 });
     });
-    models.setProvider(createWorkerGrokProvider());
-    return models;
-  }
+  });
+  private providers = new ProviderSessions(
+    this.env,
+    this.ctx.storage,
+    this.credentials,
+    this.models,
+    () => this.harness.pi(),
+  );
   private async sessionModel(sid: string) {
     return (
       (await (await this.harness.conversation(sid)).agent(BACKGROUND_CONTEXT))
-        .model ?? { provider: "openai-codex", modelId: "gpt-6-sol" }
+        .model ?? { ...CODEX_CHAT_MODEL }
     );
   }
   private admission: Promise<unknown> = Promise.resolve();
@@ -127,9 +95,6 @@ export class Assistant extends DurableObject<Env> {
           }),
         );
       registry.install(readTools(this.ctx.storage, this.env));
-      const provider = createWorkerCodexProvider();
-      this.models.setProvider(provider);
-      this.models.setProvider(createWorkerGrokProvider());
       return Harness.open(
         storage,
         {
@@ -153,20 +118,7 @@ export class Assistant extends DurableObject<Env> {
   private chatCatalog = new ChatCatalog(
     this.ctx.storage,
     this.harness,
-    async () => {
-      const model =
-        this.env.ENABLE_GROK_SUBSCRIPTION === "true"
-          ? newChatModel(this.env.GROK_CHAT_MODEL)
-          : { provider: "openai-codex", modelId: "gpt-6-sol" };
-      if (
-        model.provider === "xai" &&
-        !(await this.credentials.list()).some(
-          (x) => x.providerId === "xai" && x.type === "oauth",
-        )
-      )
-        throw new RequestError(503, "Connect Grok before creating a new chat");
-      return model;
-    },
+    () => this.providers.newChatModel(),
     (sid) => this.workspaces.assertChatCanBeTrashed(sid),
   );
   private history = new HistoryFeed(
@@ -226,19 +178,7 @@ export class Assistant extends DurableObject<Env> {
             { status: 404 },
           );
         if (path === "/api/grok/status" && request.method === "GET")
-          return Response.json({
-            connected: (await this.credentials.list()).some(
-              (c) => c.providerId === "xai" && c.type === "oauth",
-            ),
-            login: this.grokLoginStatus,
-            models: grokCatalog(),
-            budget: GROK_CHECK_BUDGET,
-            check:
-              (await this.ctx.storage.get<{
-                state: string;
-                report: GrokCheckResult;
-              }>("grok-tool-check:v1")) ?? null,
-          });
+          return Response.json(await this.providers.grokSetupStatus());
         if (
           request.method !== "POST" ||
           !["/api/grok/login", "/api/grok/check"].includes(path)
@@ -270,57 +210,12 @@ export class Assistant extends DurableObject<Env> {
               { error: "Invalid setup action" },
               { status: 400 },
             );
-          if (
-            (await this.credentials.list()).some((c) => c.providerId === "xai")
-          )
-            return Response.json(
-              { error: "Grok is already configured" },
-              { status: 409 },
-            );
-          if (this.grokLoginActive)
-            return Response.json(
-              { error: "Grok sign-in is already running" },
-              { status: 409 },
-            );
-          this.grokLoginActive = true;
-          const abort = new AbortController();
-          const onAbort = () => abort.abort();
-          request.signal.addEventListener("abort", onAbort, { once: true });
-          if (request.signal.aborted) onAbort();
-          const stream = new ReadableStream<Uint8Array>({
-            start: (controller) => {
-              const job = startGrokSubscriptionLogin(
-                this.grokModels(),
-                this.ctx.storage,
-                (status) => {
-                  this.grokLoginStatus = status;
-                  try {
-                    controller.enqueue(
-                      new TextEncoder().encode(JSON.stringify(status) + "\n"),
-                    );
-                  } catch {
-                    abort.abort();
-                  }
-                },
-                { enabled: true, signal: abort.signal },
-              ).finally(() => {
-                this.grokLoginActive = false;
-                request.signal.removeEventListener("abort", onAbort);
-                try {
-                  controller.close();
-                } catch {}
-              });
-              this.ctx.waitUntil(job);
-            },
-            cancel: () => abort.abort(),
-          });
-          return new Response(stream, {
-            headers: {
-              "Content-Type": "application/x-ndjson",
-              "Cache-Control": "no-store",
-            },
+          return await this.providers.startLogin("xai", {
+            signal: request.signal,
+            waitUntil: (job) => this.ctx.waitUntil(job),
           });
         }
+
         const action = body as Record<string, unknown>;
         if (
           Object.keys(action).length !== 2 ||
@@ -339,47 +234,18 @@ export class Assistant extends DurableObject<Env> {
             { error: "Wait for the current chat request to finish" },
             { status: 409 },
           );
-        const result = await runGrokToolCheck(
-          this.grokModels(),
-          this.credentials,
-          action.model,
-          { approved: true, storage: this.ctx.storage, signal: request.signal },
+        return Response.json(
+          await this.providers.runApprovedGrokCheck(
+            action.model,
+            request.signal,
+          ),
         );
-        // Non-secret terminal evidence is SQL-readable; credential KV is never exported.
-        if (result.status === "passed" || result.status === "failed") {
-          this.ctx.storage.sql.exec(
-            "CREATE TABLE IF NOT EXISTS app_grok_check_results (id TEXT PRIMARY KEY, recorded_at INTEGER NOT NULL, result TEXT NOT NULL CHECK(json_valid(result)))",
-          );
-          this.ctx.storage.sql.exec(
-            "INSERT INTO app_grok_check_results (id,recorded_at,result) VALUES (?,?,?) ON CONFLICT(id) DO NOTHING",
-            "v1",
-            Date.now(),
-            JSON.stringify(result),
-          );
-        }
-        return Response.json(result);
       }
       if (path === "/api/status" && request.method === "GET") {
         const model = await this.sessionModel(sid);
         return Response.json({
-          model,
-          delegateModel:
-            model.provider === "xai"
-              ? model
-              : { provider: "openai-codex", modelId: "gpt-6-luna" },
-          newChatModel:
-            this.env.ENABLE_GROK_SUBSCRIPTION === "true"
-              ? newChatModel(this.env.GROK_CHAT_MODEL)
-              : { provider: "openai-codex", modelId: "gpt-6-sol" },
+          ...(await this.providers.status(model)),
           deploymentMode,
-          modelEnabled: this.env.ENABLE_MODEL === "true",
-          canLogin:
-            model.provider === "openai-codex" &&
-            this.env.ENABLE_SUBSCRIPTION_LOGIN === "true",
-          connected: (await this.credentials.list()).some(
-            (x) => x.providerId === model.provider && x.type === "oauth",
-          ),
-          login: this.loginStatus,
           webSearchEnabled: this.env.ENABLE_WEB_SEARCH === "true",
           searchKeyPresent: !!this.env.TAVILY_API_KEY,
           canCheckSearch:
@@ -521,65 +387,11 @@ export class Assistant extends DurableObject<Env> {
             : await githubCheckStatus(this.ctx.storage);
         return Response.json({ search, github });
       }
-      if (path === "/api/login" && request.method === "POST") {
-        if (this.env.ENABLE_SUBSCRIPTION_LOGIN !== "true")
-          return Response.json(
-            { error: "Subscription setup is not enabled" },
-            { status: 403 },
-          );
-        if (
-          (await this.credentials.list()).some(
-            (x) => x.providerId === "openai-codex",
-          )
-        )
-          return Response.json(
-            { error: "Subscription is already connected." },
-            { status: 409 },
-          );
-        if (this.loginActive) return Response.json(this.loginStatus);
-        await this.harness.pi();
-        this.loginActive = true;
-        const abort = new AbortController();
-        const timer = setTimeout(() => abort.abort(), 5 * 60 * 1000);
-        request.signal.addEventListener("abort", () => abort.abort(), {
-          once: true,
+      if (path === "/api/login" && request.method === "POST")
+        return await this.providers.startLogin("openai-codex", {
+          signal: request.signal,
+          waitUntil: (job) => this.ctx.waitUntil(job),
         });
-        const body = new ReadableStream<Uint8Array>({
-          start: (controller) => {
-            const job = startSubscriptionLogin(
-              this.models,
-              this.ctx.storage,
-              (s) => {
-                this.loginStatus = s;
-                try {
-                  controller.enqueue(
-                    new TextEncoder().encode(JSON.stringify(s) + "\n"),
-                  );
-                } catch {
-                  abort.abort();
-                }
-              },
-              { enabled: true, runtimeSupported: true, signal: abort.signal },
-            ).finally(() => {
-              clearTimeout(timer);
-              this.loginActive = false;
-              try {
-                controller.close();
-              } catch {}
-            });
-            this.ctx.waitUntil(job);
-          },
-          cancel: () => {
-            abort.abort();
-          },
-        });
-        return new Response(body, {
-          headers: {
-            "Content-Type": "application/x-ndjson",
-            "Cache-Control": "no-store",
-          },
-        });
-      }
       if (path === "/api/sessions" && request.method === "GET")
         return Response.json(
           await this.chatCatalog.list(url.searchParams.get("deleted") === "1"),
@@ -629,29 +441,7 @@ export class Assistant extends DurableObject<Env> {
       if (path === "/api/sessions" && request.method === "POST")
         return Response.json(await this.chatCatalog.create());
       if (path === "/api/submit" && request.method === "POST") {
-        if (this.env.ENABLE_MODEL !== "true")
-          return Response.json(
-            { error: "Model access is not enabled yet" },
-            { status: 503 },
-          );
-        const model = await this.sessionModel(sid);
-        if (
-          model.provider === "xai" &&
-          this.env.ENABLE_GROK_SUBSCRIPTION !== "true"
-        )
-          return Response.json(
-            { error: "Grok access is disabled" },
-            { status: 503 },
-          );
-        if (
-          !(await this.credentials.list()).some(
-            (x) => x.providerId === model.provider && x.type === "oauth",
-          )
-        )
-          return Response.json(
-            { error: "Connect your subscription first" },
-            { status: 503 },
-          );
+        await this.providers.assertCanSubmit(() => this.sessionModel(sid));
         const raw = await request.text();
         if (raw.length > 20000)
           return Response.json({ error: "Message too long" }, { status: 413 });
