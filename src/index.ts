@@ -1,3 +1,5 @@
+import {ChatCatalog} from './chat-catalog';
+import {RequestError,jsonObject} from './http-input';
 import {logSavedFailure,logTechnicalError,diagnoseSavedErrorRead} from './error-log';
 import { DurableObject } from 'cloudflare:workers';
 import { PiHarness } from 'agents/harness/pi';
@@ -33,13 +35,13 @@ export class Assistant extends DurableObject<Env> {
  private grokLoginActive=false;
  private grokLoginStatus:GrokLoginStatus={status:'disabled'};
  private grokModels(){const models=createModels({credentials:this.credentials,authContext:{env:async()=>undefined,fileExists:async()=>false}});models.setProvider(createWorkerGrokProvider());return models;}
- private async chatSessions(){const ids=new Set<string>();const storage=await this.harness.storage();let cursor;do{const page=await storage.scanConversations({},100,cursor,BACKGROUND_CONTEXT);for(const row of page.items)if(!row.owner&&!row.parent)ids.add(String(row.id));cursor=page.next;}while(cursor);return(await this.harness.sessions.list()).filter(row=>ids.has(row.id));}
  private async sessionModel(sid:string){return (await (await this.harness.conversation(sid)).agent(BACKGROUND_CONTEXT)).model??{provider:'openai-codex',modelId:'gpt-6-sol'};}
  private activeStreams = 0;
  private streamStops=new Map<string,()=>Promise<void>>();
  private closedStreams=new Map<string,number>();
  private admission: Promise<unknown> = Promise.resolve();
  harness = new PiHarness({harness:({storage,context})=>{const registry=createRegistry();registry.install(delegation());if(this.workspaceEnabled())registry.install(workspaceTools({request:(session,r)=>this.workspaceRequest(session,r)}));registry.install(readTools(this.ctx.storage,this.env));const provider=createWorkerCodexProvider();this.models.setProvider(provider);this.models.setProvider(createWorkerGrokProvider());return Harness.open(storage,{models:this.models,registry,settings:{compaction:{enabled:false},progress:{partialIntervalMs:250,outputIntervalMs:500},retry:{enabled:true,maxRetries:1,baseDelayMs:1000},stream:{transport:'sse',timeoutMs:120000,maxRetries:0}}},context);},defaults:{model:{provider:'openai-codex',id:'gpt-6-sol'},thinkingLevel:'low'}});
+ private chatCatalog=new ChatCatalog(this.ctx.storage,this.harness,async()=>{const model=this.env.ENABLE_GROK_SUBSCRIPTION==='true'?newChatModel(this.env.GROK_CHAT_MODEL):{provider:'openai-codex',modelId:'gpt-6-sol'};if(model.provider==='xai'&&!(await this.credentials.list()).some(x=>x.providerId==='xai'&&x.type==='oauth'))throw new RequestError(503,'Connect Grok before creating a new chat');return model;},async sid=>{const workspace=await this.ctx.storage.get<string>('workspace-session:'+sid);if(workspace&&this.workspaceEnabled()){const state=await this.workspaceRequest(sid,{workspaceId:workspace,action:'status',operationId:'0'.repeat(64)}) as {phase:string};if(state.phase!=='closed')throw new RequestError(409,'Close the workspace before deleting this chat');}});
  lifecycle = Lifecycle.install(this).use(this.harness);
  async fetch(request:Request):Promise<Response>{
   try{await authorize(request,this.env);}catch{return new Response('Forbidden',{status:403});}
@@ -53,12 +55,12 @@ export class Assistant extends DurableObject<Env> {
   const url=new URL(request.url);const path=url.pathname;const sid=url.searchParams.get('session')??'1';
   if(!/^\d{1,12}$/.test(sid))return Response.json({error:'Invalid session'},{status:400});
   try{
-   if((path==='/api/status'||path==='/api/events'||path==='/api/submit'||path==='/api/session-title'||path.startsWith('/api/workspaces'))&&await this.ctx.storage.get<number>('chat-deleted:'+sid))return Response.json({error:'Chat is in Recently deleted. Restore it before opening.'},{status:410});
+   if((path==='/api/status'||path==='/api/events'||path==='/api/submit'||path==='/api/session-title'||path.startsWith('/api/workspaces')))await this.chatCatalog.requireActive(sid);
    if(path.startsWith('/api/grok/')){
     if(this.env.ENABLE_GROK_SUBSCRIPTION!=='true')return Response.json({error:'Grok setup is not enabled'},{status:404});
     if(path==='/api/grok/status'&&request.method==='GET')return Response.json({connected:(await this.credentials.list()).some(c=>c.providerId==='xai'&&c.type==='oauth'),login:this.grokLoginStatus,models:grokCatalog(),budget:GROK_CHECK_BUDGET,check:await this.ctx.storage.get<{state:string;report:GrokCheckResult}>('grok-tool-check:v1')??null});
     if(request.method!=='POST'||!['/api/grok/login','/api/grok/check'].includes(path))return Response.json({error:'Not found'},{status:404});
-    const raw=await request.text();if(raw.length>100)return Response.json({error:'Invalid setup action'},{status:400});let body:unknown;try{body=JSON.parse(raw);}catch{return Response.json({error:'Invalid setup action'},{status:400});}
+    const raw=await request.text();if(raw.length>100)return Response.json({error:'Invalid setup action'},{status:400});let body:unknown;try{body=jsonObject(raw);}catch{return Response.json({error:'Invalid setup action'},{status:400});}
     if(!body||typeof body!=='object'||Array.isArray(body))return Response.json({error:'Invalid setup action'},{status:400});
     if(path==='/api/grok/login'){
      if(Object.keys(body).length!==0)return Response.json({error:'Invalid setup action'},{status:400});
@@ -82,10 +84,10 @@ export class Assistant extends DurableObject<Env> {
    }
    if(path==='/api/workspaces'&&request.method==='POST'){
     if(!this.workspaceEnabled())return Response.json({error:'Workspace disabled'},{status:403});
-    const raw=await request.text();if(raw.length>1000)return Response.json({error:'Invalid workspace request'},{status:400});const b=JSON.parse(raw);
+    const raw=await request.text();if(raw.length>1000)return Response.json({error:'Invalid workspace request'},{status:400});const b=jsonObject(raw);
     if(typeof b.workspaceId!=='string'||! /^[a-f0-9-]{36}$/.test(b.workspaceId))return Response.json({error:'Invalid workspace ID'},{status:400});
     const old=await this.ctx.storage.get<string>('workspace-session:'+sid);if(old&&old!==b.workspaceId){const state=await this.workspaceRequest(sid,{workspaceId:old,action:'status',operationId:'0'.repeat(64)}) as {phase:string};if(state.phase!=='closed')return Response.json({error:'Cancel the active workspace before opening another'},{status:409});}
-    if(!(await this.harness.sessions.list()).some(s=>s.id===sid&&!s.parent))return Response.json({error:'Conversation not found'},{status:404});
+    await this.chatCatalog.requireActive(sid);
     const owner=await this.ctx.storage.get<string>('workspace-owner:'+b.workspaceId);if(owner&&owner!==sid)return Response.json({error:'Workspace identity conflict'},{status:409});
     const active=await this.ctx.storage.get<string>('workspace-active');if(active&&active!==b.workspaceId){const state=await this.env.Workspaces!.getByName(active).request({workspaceId:active,action:'status',operationId:'0'.repeat(64)}) as {phase:string};if(state.phase!=='closed')return Response.json({error:'Cancel the active workspace before opening another task'},{status:409});}
     await this.ctx.storage.put('workspace-active',b.workspaceId);await this.ctx.storage.put('workspace-owner:'+b.workspaceId,sid);await this.ctx.storage.put('workspace-session:'+sid,b.workspaceId);
@@ -97,9 +99,9 @@ export class Assistant extends DurableObject<Env> {
     if(await this.ctx.storage.get<string>('workspace-owner:'+id)!==sid)return Response.json({error:'Workspace not found'},{status:404});
     const stub=this.env.Workspaces!.getByName(id);
     if(operation==='artifact'&&request.method==='GET')return Response.json(await stub.artifact(url.searchParams.get('export')??undefined),{headers:{'Content-Disposition':`attachment; filename="workspace-${id}.json"`}});
-    if(operation==='extend'&&request.method==='POST'){const raw=await request.text();if(raw.length>1000)return Response.json({error:'Invalid extension'},{status:400});const b=JSON.parse(raw);if(!['task','command'].includes(b.target))return Response.json({error:'Invalid extension target'},{status:400});return Response.json(await stub.extend(b.target,b.minutes));}
+    if(operation==='extend'&&request.method==='POST'){const raw=await request.text();if(raw.length>1000)return Response.json({error:'Invalid extension'},{status:400});const b=jsonObject(raw);if((b.target!=='task'&&b.target!=='command')||typeof b.minutes!=='number')return Response.json({error:'Invalid extension target'},{status:400});return Response.json(await stub.extend(b.target,b.minutes));}
     if(!operation&&request.method==='GET')return Response.json(await stub.request({workspaceId:id,action:'status',operationId:'0'.repeat(64)}));
-    if(!operation&&request.method==='POST'){const raw=await request.text();if(raw.length>1000)return Response.json({error:'Invalid owner action'},{status:400});const b=JSON.parse(raw);if(!['cancel','export'].includes(b.action))return Response.json({error:'Use typed model tools for workspace files and commands'},{status:400});return Response.json(await stub.request({workspaceId:id,action:b.action,operationId:b.operationId}));}
+    if(!operation&&request.method==='POST'){const raw=await request.text();if(raw.length>1000)return Response.json({error:'Invalid owner action'},{status:400});const b=jsonObject(raw);if((b.action!=='cancel'&&b.action!=='export')||typeof b.operationId!=='string')return Response.json({error:'Use typed model tools for workspace files and commands'},{status:400});return Response.json(await stub.request({workspaceId:id,action:b.action,operationId:b.operationId}));}
     return Response.json({error:'Method not allowed'},{status:405});
    }
    if(path==='/api/search-check'&&request.method==='POST'){
@@ -120,28 +122,23 @@ export class Assistant extends DurableObject<Env> {
     },cancel:()=>{abort.abort();}});
     return new Response(body,{headers:{'Content-Type':'application/x-ndjson','Cache-Control':'no-store'}});
    }
-   if(path==='/api/sessions'&&request.method==='GET'){const deleted=url.searchParams.get('deleted')==='1';const chats=await Promise.all((await this.chatSessions()).map(async row=>({...row,title:await this.ctx.storage.get<string>('chat-title:'+row.id)??await this.ctx.storage.get<string>('chat-auto-title:'+row.id)??'',deletedAt:await this.ctx.storage.get<number>('chat-deleted:'+row.id)})));return Response.json(chats.filter(row=>!!row.deletedAt===deleted).sort((a,b)=>Number(b.id)-Number(a.id)));}
+   if(path==='/api/sessions'&&request.method==='GET')return Response.json(await this.chatCatalog.list(url.searchParams.get('deleted')==='1'));
    if(path==='/api/session-trash'&&request.method==='POST'){
-    const raw=await request.text();if(raw.length>100)return Response.json({error:'Invalid chat action'},{status:400});const body=JSON.parse(raw);if(!body||Object.keys(body).length!==1||!['delete','restore'].includes(body.action))return Response.json({error:'Use delete or restore'},{status:400});
-    const row=(await this.chatSessions()).find(row=>row.id===sid);if(!row)return Response.json({error:'Chat not found'},{status:404});const key='chat-deleted:'+sid;
-    if(body.action==='delete'){if(row.busy||(await this.harness.pending({session:sid})).length)return Response.json({error:'Wait for the response to finish before deleting this chat'},{status:409});const workspace=await this.ctx.storage.get<string>('workspace-session:'+sid);if(workspace&&this.workspaceEnabled()){const state=await this.workspaceRequest(sid,{workspaceId:workspace,action:'status',operationId:'0'.repeat(64)}) as {phase:string};if(state.phase!=='closed')return Response.json({error:'Close the workspace before deleting this chat'},{status:409});}const previous=await this.ctx.storage.get<number>(key);if(!previous)await this.ctx.storage.put(key,Date.now());return Response.json({id:sid,deleted:true});}
-    await this.ctx.storage.delete(key);return Response.json({id:sid,deleted:false});
+    const raw=await request.text();if(raw.length>100)return Response.json({error:'Invalid chat action'},{status:400});const body=jsonObject(raw);if(Object.keys(body).length!==1||(body.action!=='delete'&&body.action!=='restore'))return Response.json({error:'Use delete or restore'},{status:400});
+    return Response.json(await(body.action==='delete'?this.chatCatalog.trash(sid):this.chatCatalog.restore(sid)));
    }
    if(path==='/api/session-title'&&request.method==='POST'){
     const raw=await request.text();if(raw.length>1000)return Response.json({error:'Title too long'},{status:400});
-    const b=JSON.parse(raw);if(typeof b.title!=='string'||!b.title.trim()||b.title.length>80||/[\x00-\x1f\x7f]/.test(b.title))return Response.json({error:'Use a title of 1–80 characters'},{status:400});
-    if(!(await this.harness.sessions.list()).some(s=>s.id===sid&&!s.parent))return Response.json({error:'Conversation not found'},{status:404});
-    await this.ctx.storage.put(`chat-title:${sid}`,b.title.trim());return Response.json({title:b.title.trim()});
+    const b=jsonObject(raw);if(typeof b.title!=='string'||!b.title.trim()||b.title.length>80||/[\x00-\x1f\x7f]/.test(b.title))return Response.json({error:'Use a title of 1–80 characters'},{status:400});
+    await this.chatCatalog.requireActive(sid);
+    return Response.json(await this.chatCatalog.rename(sid,b.title.trim()));
    }
-   if(path==='/api/sessions'&&request.method==='POST'){
-    const active=await Promise.all((await this.chatSessions()).map(async row=>!(await this.ctx.storage.get<number>('chat-deleted:'+row.id))));if(active.filter(Boolean).length>=100)return Response.json({error:'Active chat limit of 100 reached'},{status:429});
-    const model=this.env.ENABLE_GROK_SUBSCRIPTION==='true'?newChatModel(this.env.GROK_CHAT_MODEL):{provider:'openai-codex',modelId:'gpt-6-sol'};if(model.provider==='xai'&&!(await this.credentials.list()).some(x=>x.providerId==='xai'&&x.type==='oauth'))return Response.json({error:'Connect Grok before creating a new chat'},{status:503});const s=await(await this.harness.pi()).createConversation({ownership:{kind:'ownerless'},agent:{model,thinkingLevel:'low'}},BACKGROUND_CONTEXT);return Response.json({id:String(s.id),model});
-   }
+   if(path==='/api/sessions'&&request.method==='POST')return Response.json(await this.chatCatalog.create());
    if(path==='/api/submit'&&request.method==='POST'){
     if(this.env.ENABLE_MODEL!=='true')return Response.json({error:'Model access is not enabled yet'},{status:503});
     const model=await this.sessionModel(sid);if(model.provider==='xai'&&this.env.ENABLE_GROK_SUBSCRIPTION!=='true')return Response.json({error:'Grok access is disabled'},{status:503});if(!(await this.credentials.list()).some(x=>x.providerId===model.provider&&x.type==='oauth'))return Response.json({error:'Connect your subscription first'},{status:503});
     const raw=await request.text();if(raw.length>20000)return Response.json({error:'Message too long'},{status:413});
-    const b=JSON.parse(raw);if(typeof b.text!=='string'||!b.text.trim()||b.text.length>12000||typeof b.operationId!=='string'||!/^[-a-zA-Z0-9]{8,80}$/.test(b.operationId))return Response.json({error:'Invalid message'},{status:400});
+    const b=jsonObject(raw);if(typeof b.text!=='string'||!b.text.trim()||b.text.length>12000||typeof b.operationId!=='string'||!/^[-a-zA-Z0-9]{8,80}$/.test(b.operationId))return Response.json({error:'Invalid message'},{status:400});
     const key=`admission:${sid}:${b.operationId}`;
     const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(b.text)))).map(x=>x.toString(16).padStart(2,'0')).join('');
     const prior=await this.ctx.storage.get<{digest:string,receipt?:unknown}>(key);
@@ -155,7 +152,7 @@ export class Assistant extends DurableObject<Env> {
      });
      if(!reserved)return Response.json({error:'Daily limit of 50 messages reached'},{status:429});
     }
-    const receipt=await this.harness.submit(b.text,{session:sid,operationId:b.operationId});await this.ctx.storage.put(key,{digest,receipt});if(!await this.ctx.storage.get(`chat-auto-title:${sid}`)){const title=conversationTitle(b.text);if(title)await this.ctx.storage.put(`chat-auto-title:${sid}`,title);}return Response.json(receipt);
+    const receipt=await this.harness.submit(b.text,{session:sid,operationId:b.operationId});await this.ctx.storage.put(key,{digest,receipt});await this.chatCatalog.autoTitle(sid,b.text);return Response.json(receipt);
    }
    if(path==='/api/abort'&&request.method==='POST')return Response.json({aborted:await this.harness.abort({session:sid})});
    if(path==='/api/events/close'&&request.method==='POST'){
@@ -167,7 +164,7 @@ export class Assistant extends DurableObject<Env> {
     if(url.searchParams.get('snapshot')==='1'){
      const events=await this.harness.session(sid).events();try{const projection=new ChatProjection();projection.apply(events.snapshot);
       const diagnostic=url.searchParams.get('diagnostic')==='saved-error'?await diagnoseSavedErrorRead(url,events.snapshot.entries,this.ctx.storage,sid):undefined;
-      const title=await this.ctx.storage.get<string>(`chat-title:${sid}`)??await this.ctx.storage.get<string>(`chat-auto-title:${sid}`)??conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text);
+      const title=await this.chatCatalog.title(sid,projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text);
       return Response.json({...projection.view(),historyProtocol:2,...(diagnostic?{diagnostic}:{}),title},{headers:{'Cache-Control':'no-store'}});
      }finally{await events.stop();}
     }
@@ -185,7 +182,7 @@ export class Assistant extends DurableObject<Env> {
      events=await this.harness.session(sid).events();if(ended){await events.stop();return new Response(null,{status:204});}
      const projection=new ChatProjection();projection.apply(events.snapshot);
      const diagnostic=url.searchParams.get('diagnostic')==='saved-error'?await diagnoseSavedErrorRead(url,events.snapshot.entries,this.ctx.storage,sid):undefined;
-     const customTitle=await this.ctx.storage.get<string>(`chat-title:${sid}`);const autoTitle=await this.ctx.storage.get<string>(`chat-auto-title:${sid}`);const title=customTitle??autoTitle??conversationTitle(projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text);
+     const title=await this.chatCatalog.title(sid,projection.messages.find(m=>m.role==='user'&&conversationTitle(m.text))?.text);
      if(ended)return new Response(null,{status:204});
      const encoder=new TextEncoder();const source=events;
      const body=new ReadableStream<Uint8Array>({start:c=>{controller=c;
@@ -197,7 +194,7 @@ export class Assistant extends DurableObject<Env> {
     }catch(error){await stop();throw error;}
    }
    return Response.json({error:'Not found'},{status:404});
-  }catch(error){logTechnicalError('request',error,crypto.randomUUID());return Response.json({error:'Request unavailable. Your saved chat is unchanged.'},{status:500});}
+  }catch(error){if(error instanceof RequestError)return Response.json({error:error.message},{status:error.status});logTechnicalError('request',error,crypto.randomUUID());return Response.json({error:'Request unavailable. Your saved chat is unchanged.'},{status:500});}
  }
 }
 export default {async fetch(request:Request,env:Env):Promise<Response>{
