@@ -8,6 +8,7 @@ import {
   toolLabel,
   stateDetail,
   resultSummary,
+  inputContext,
   type ToolActivity,
   type ToolState,
   type ToolLinkage,
@@ -62,8 +63,15 @@ export class ChatProjection {
     for (const m of entry.model ?? [])
       if (m.role === "assistant")
         for (const block of m.content)
-          if (block.type === "toolCall")
-            this.tool(block.id, block.name, "pending", String(entry.id));
+          if (block.type === "toolCall") {
+            const row = this.tool(
+              block.id,
+              block.name,
+              "pending",
+              String(entry.id),
+            );
+            if (row) Object.assign(row, inputContext(block.arguments));
+          }
   }
   entry(entry: EntryRecord) {
     const entryId = String(entry.id);
@@ -201,6 +209,8 @@ export class ChatProjection {
     if (e.type === "entry_appended") this.entry(e.entry);
     if (e.type === "tool_execution_start") {
       const row = this.tool(e.toolCallId, e.toolName, "running");
+      if (row && !["success", "error", "interrupted"].includes(row.state))
+        Object.assign(row, inputContext(e.args));
       if (row && !["success", "error", "interrupted"].includes(row.state)) {
         row.state = "running";
         row.detail = stateDetail(row.state);
@@ -247,12 +257,26 @@ export class ChatProjection {
     const partialTools: (ToolActivity & { roundId?: string })[] = [];
     const unattached: ToolActivity[] = [];
     for (const row of this.tools.values()) {
-      const { id, label, state, detail, summary, sources } = row;
+      const {
+        id,
+        label,
+        state,
+        detail,
+        summary,
+        sources,
+        input,
+        context,
+        output,
+        inputTruncated,
+        outputTruncated,
+      } = row;
       const item: ToolActivity & { roundId?: string; linkage: ToolLinkage } = {
         id,
         label,
         state,
         detail,
+        ...(input !== undefined ? { input, context, inputTruncated } : {}),
+        ...(output !== undefined ? { output, outputTruncated } : {}),
         ...(summary ? { summary } : {}),
         ...(sources ? { sources } : {}),
         linkage: "unlinked",
