@@ -69,3 +69,5 @@ test('model continuation failure after successful workspace tools remains visibl
 test('task fault notification survives run end and clears on a new run',()=>{
  const p=new ChatProjection();p.apply({type:'task_failed',taskId:'1' as never,kind:'network',message:'private raw error'});p.apply({type:'run_end',inputs:[]});assert.match(p.view().activity,/could not finish/);assert.ok(!JSON.stringify(p.view()).includes('private raw error'));p.apply({type:'run_start',inputs:[]});assert.equal(p.view().activity,'');
 });
+
+test('saved failures expose safe structured data without requiring presentation text parsing',()=>{const p=new ChatProjection();p.apply(snapshot([{id:'failed',kind:'pi.assistant',model:[{role:'assistant',content:[],stopReason:'error',errorMessage:'429: rate limit secret=PRIVATE'}]} as never]));const failure=p.view().messages[0].failure;assert.deepEqual(failure,{kind:'model',diagnostic:{category:'rate or usage limit',httpStatus:'429'},recoveryAction:'check-status'});assert.ok(!JSON.stringify(failure).includes('PRIVATE'));});
