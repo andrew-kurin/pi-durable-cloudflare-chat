@@ -5,6 +5,19 @@ test('tool activity names describe source reads with recorded input context',()=
 function assistant(id:string,calls:{id:string;name:string}[]){return {id,kind:'pi.assistant',model:[{role:'assistant',content:[{type:'thinking',thinking:'hidden reasoning'},...calls.map(c=>({type:'toolCall',...c,arguments:{query:'password=private',task:'private task'}}))]}]} as never;}
 function resultEntry(callId:string,name:string,data:unknown={},error=false,code?:string){return {id:'result-'+callId,kind:'pi.tool-result',data:{diagnostics:code?[{code,message:'raw secret diagnostic'}]:[]},model:[{role:'toolResult',toolCallId:callId,toolName:name,isError:error,durationMs:1234,content:[{type:'text',text:JSON.stringify({data})}]}]} as never;}
 function snapshot(entries:never[],tools:any[]=[],run?:any){return {type:'snapshot',entries,tools,run,inbox:[],agent:{},usage:{},compactions:[]} as never;}
+test('workspace startup progress is controlled, survives reconnect and clears at terminal outcomes',()=>{
+ const p=new ChatProjection(),entry=assistant('a',[{id:'c',name:'workspace_exec'}]);
+ p.entry(entry);p.apply({type:'tool_execution_start',toolCallId:'c',toolName:'workspace_exec',args:{argv:['npm','test']}});
+ for(const [phase,text] of [['starting','Starting workspace…'],['ready','Workspace ready. Running tool…'],['failed','Workspace activation failed.']]){
+  p.apply({type:'tool_execution_update',toolCallId:'c',toolName:'workspace_exec',details:{workspaceActivation:phase,private:'DO_NOT_COPY'}} as never);
+  assert.equal(p.view().messages[0].tools[0].summary,text);if(phase==='failed'){assert.equal(p.view().messages[0].tools[0].state,'error');assert.equal(p.view().activity,'');}assert.ok(!JSON.stringify(p.view()).includes('DO_NOT_COPY'));
+  p.apply(snapshot([entry],[{callId:'c',name:'workspace_exec',status:'running',details:{workspaceActivation:phase}}],{inputs:[]}));assert.equal(p.view().messages[0].tools[0].summary,text);
+ }
+ p.apply({type:'tool_execution_end',toolCallId:'c',toolName:'workspace_exec',entry:resultEntry('c','workspace_exec',{error:'Startup failed. Open a workspace explicitly.'},true)});
+ const result=p.view().messages[0].tools[0];assert.equal(result.state,'error');assert.match(result.summary!,/Startup failed/);
+ p.apply({type:'tool_execution_update',toolCallId:'c',toolName:'workspace_exec',details:{workspaceActivation:'starting'}} as never);assert.deepEqual(p.view().messages[0].tools[0],result);
+ p.apply(snapshot([entry],[{callId:'c',name:'workspace_exec',status:'running',details:{workspaceActivation:'starting'}}],{inputs:[]}));p.apply({type:'run_end',inputs:[]});assert.equal(p.view().messages[0].tools[0].summary,undefined);assert.equal(p.view().messages[0].tools[0].state,'unavailable');
+});
 test('tool calls attach to originating assistant even with no text; pending, running and results are verified',()=>{
  const p=new ChatProjection();p.apply({type:'message_end',entry:assistant('a',[{id:'search',name:'web_search'},{id:'luna',name:'ask_luna'}])});
  assert.deepEqual(p.view().messages[0].tools.map(t=>t.state),['pending','pending']);

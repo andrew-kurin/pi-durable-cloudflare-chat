@@ -227,6 +227,87 @@ try {
   );
   assert.match(await logs.textContent(), /Display excerpt truncated/);
   await page.screenshot({ path: out + "/mobile-tool-logs.png" });
+  const activation = new ChatProjection();
+  activation.entry({
+    id: "activation",
+    kind: "pi.assistant",
+    model: [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "auto",
+            name: "workspace_exec",
+            arguments: { argv: ["npm", "test"] },
+          },
+        ],
+      },
+    ],
+  });
+  activation.apply({
+    type: "tool_execution_start",
+    toolCallId: "auto",
+    toolName: "workspace_exec",
+    args: { argv: ["npm", "test"] },
+  });
+  for (const [phase, label] of [
+    ["starting", "Starting workspace…"],
+    ["ready", "Workspace ready. Running tool…"],
+    ["failed", "Workspace activation failed."],
+  ]) {
+    activation.apply({
+      type: "tool_execution_update",
+      toolCallId: "auto",
+      toolName: "workspace_exec",
+      details: { workspaceActivation: phase },
+    });
+    await page.evaluate(
+      (v) => window.streams.at(-1).onmessage({ data: JSON.stringify(v) }),
+      { ...activation.view(), historyProtocol: 2 },
+    );
+    const row = page.locator(".tool-row");
+    assert.equal(await row.count(), 1);
+    assert.ok((await row.locator("summary").textContent()).includes(label));
+    if(phase === "failed") assert.equal(await row.getAttribute("data-state"), "error");
+    for (const width of [320, 390, 1280]) {
+      await page.setViewportSize({ width, height: 844 });
+      assert.equal(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+        true,
+      );
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: out + "/workspace-" + phase + ".png" });
+  }
+  activation.entry({
+    id: "auto-error",
+    kind: "pi.tool-result",
+    model: [
+      {
+        role: "toolResult",
+        toolCallId: "auto",
+        toolName: "workspace_exec",
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "Workspace startup failed; no tool operation ran. Open a workspace explicitly to try again.",
+          },
+        ],
+      },
+    ],
+  });
+  await page.evaluate(
+    (v) => window.streams.at(-1).onmessage({ data: JSON.stringify(v) }),
+    { ...activation.view(), historyProtocol: 2 },
+  );
+  assert.match(
+    await page.locator(".tool-row[data-state=error]>summary").textContent(),
+    /Workspace startup failed/,
+  );
   assert.equal(modelCalls, 0);
   assert.deepEqual(errors, []);
   await writeFile(

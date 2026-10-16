@@ -91,7 +91,7 @@ export class Assistant extends DurableObject<Env> {
       if (this.workspaceEnabled())
         registry.install(
           workspaceTools({
-            request: (session, r) => this.workspaces.execute(session, r),
+            request: (session, r, progress) => this.workspaces.execute(session, r, progress),
           }),
         );
       registry.install(readTools(this.ctx.storage, this.env));
