@@ -468,6 +468,103 @@ try {
       path: out + "/workspace-status-" + phase + ".png",
     });
   }
+  const wait = new ChatProjection();
+  wait.entry({
+    id: "waiting",
+    kind: "pi.assistant",
+    model: [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "wait-call",
+            name: "workspace_wait",
+            arguments: {
+              workspaceId: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
+              runId: "1".repeat(64),
+              waitMs: 20000,
+            },
+          },
+        ],
+      },
+    ],
+  });
+  wait.apply({
+    type: "tool_execution_start",
+    toolCallId: "wait-call",
+    toolName: "workspace_wait",
+    args: { runId: "1".repeat(64), waitMs: 20000 },
+  });
+  wait.apply({
+    type: "tool_execution_update",
+    toolCallId: "wait-call",
+    toolName: "workspace_wait",
+    details: { workspaceWait: "waiting" },
+  });
+  await page.evaluate(
+    (v) => window.streams.at(-1).onmessage({ data: JSON.stringify(v) }),
+    { ...wait.view(), historyProtocol: 2 },
+  );
+  assert.match(
+    await page.locator(".tool-row>summary").textContent(),
+    /Waiting for existing command/,
+  );
+  for (const [outcome, label] of [
+    ["still_running", "not complete"],
+    ["completed", "Continue requested work"],
+    ["stopping", "cleanup in progress"],
+  ]) {
+    wait.entry({
+      id: "wait-result",
+      kind: "pi.tool-result",
+      model: [
+        {
+          role: "toolResult",
+          toolCallId: "wait-call",
+          toolName: "workspace_wait",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                data: {
+                  outcome,
+                  waitedMs: 20000,
+                  taskRemainingMs: 880000,
+                  commandRemainingMs: 280000,
+                },
+              }),
+            },
+          ],
+        },
+      ],
+    });
+    await page.evaluate(
+      (v) => window.streams.at(-1).onmessage({ data: JSON.stringify(v) }),
+      { ...wait.view(), historyProtocol: 2 },
+    );
+    assert.ok(
+      (await page.locator(".tool-row>summary").textContent()).includes(label),
+    );
+    assert.equal(await page.locator(".tool-state").textContent(), "Checked");
+    if (outcome === "still_running")
+      assert.match(
+        await page.locator(".tool-preview").textContent(),
+        /^280s remaining/,
+      );
+    for (const width of [320, 390, 1280]) {
+      await page.setViewportSize({ width, height: 844 });
+      assert.equal(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+        true,
+      );
+      await page.screenshot({
+        path: out + "/workspace-wait-" + outcome + "-" + width + ".png",
+      });
+    }
+  }
   assert.equal(modelCalls, 0);
   assert.deepEqual(errors, []);
   await writeFile(

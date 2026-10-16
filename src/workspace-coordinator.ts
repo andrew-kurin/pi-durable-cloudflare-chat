@@ -226,7 +226,7 @@ export class WorkspaceCoordinator {
       mode === "automatic"
         ? "Status is observational, not a workspace failure. Continue intended project work with workspace_read, workspace_edit or workspace_exec; omit workspaceId so that tool starts a fresh workspace automatically. Old edits are not restored; prior artifact references are retained and unverified. Do not replay a prior command."
         : mode === "ready"
-          ? "Continue intended project work with workspace_read, workspace_edit or workspace_exec. Poll an existing runId rather than replaying a command."
+          ? "Continue intended project work with workspace_read, workspace_edit or workspace_exec. For a running command, use workspace_wait with this workspace id and the existing runId instead of rapid status/log polling. After exit 0, continue the requested dependent work; still running is not completion. Never replay a command."
           : mode === "wait"
             ? "Wait for workspace setup or cleanup, then check status. Do not restart or replay commands."
             : mode === "explicit_target_closed"

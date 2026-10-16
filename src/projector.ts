@@ -65,6 +65,7 @@ export class ChatProjection {
   }
   private activation(row: ToolActivity, details: unknown) {
     if (["success", "error", "interrupted"].includes(row.state)) return;
+    if (details && typeof details === "object" && "workspaceWait" in details && details.workspaceWait === "waiting") row.summary = "Waiting for existing command…";
     const phase =
       details && typeof details === "object" && "workspaceActivation" in details
         ? details.workspaceActivation

@@ -88,7 +88,10 @@ export function toolActivity(document, tools, expanded, onToggle) {
           : "Tool";
       const state = document.createElement("span");
       state.className = "tool-state";
-      state.textContent = states[tool.state];
+      state.textContent =
+        label.textContent === "Wait for command" && tool.state === "success"
+          ? "Checked"
+          : states[tool.state];
       summary.append(label, state);
       if (typeof tool.context === "string" && tool.context) {
         const context = document.createElement("span");
