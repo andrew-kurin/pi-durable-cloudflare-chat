@@ -6,7 +6,7 @@ test('repeated SSE snapshots preserve expanded state and focus; reconnect/sessio
  w.fetch=async(path:string)=>({ok:true,json:async()=>path.includes('/api/sessions')?[{id:'1'},{id:'2'}]:{connected:true,modelEnabled:true}});w.EventSource=class{onmessage:any;close(){}constructor(){streams.push(this)}};w.eval(script);await new Promise(r=>setTimeout(r,0));
  const data={messages:[{id:'a',role:'assistant',text:'',tools:[{id:'c',label:'Ask Luna',state:'pending',detail:'Waiting to start.'}]}],partial:'',busy:true};const send=(index:number=0)=>streams[index].onmessage({data:JSON.stringify(data)});send();assert.equal(w.document.querySelectorAll('.tool-row').length,1);
  const row=w.document.querySelector('.tool-row');row.open=true;row.dispatchEvent(new w.Event('toggle'));w.document.querySelector('.tool-row > summary').focus();data.messages[0].tools[0].state='running';send();assert.equal(w.document.querySelector('.tool-row').open,true);assert.equal(w.document.activeElement.tagName,'SUMMARY');send();assert.equal(w.document.querySelectorAll('.tool-row').length,1);
- data.messages[0].tools[0].state='success';data.busy=false;send();assert.equal(w.document.querySelector('.tool-state').textContent,'Recorded');
+ data.messages[0].tools[0].state='success';data.busy=false;send();assert.equal(w.document.querySelector('.tool-state').textContent,'Done');
  w.document.querySelector('[data-session-id="2"]').click();send(1);assert.equal(w.document.querySelector('.tool-row').open,false);streams[0].onmessage({data:JSON.stringify({messages:[],partial:'stale'})});assert.equal(w.document.querySelectorAll('.tool-row').length,1);
  w.document.querySelector('[data-session-id="1"]').click();send(2);assert.equal(w.document.querySelector('.tool-row').open,true);dom.window.close();
 });
