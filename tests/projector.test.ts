@@ -84,3 +84,11 @@ test('task fault notification survives run end and clears on a new run',()=>{
 });
 
 test('saved failures expose safe structured data without requiring presentation text parsing',()=>{const p=new ChatProjection();p.apply(snapshot([{id:'failed',kind:'pi.assistant',model:[{role:'assistant',content:[],stopReason:'error',errorMessage:'429: rate limit secret=PRIVATE'}]} as never]));const failure=p.view().messages[0].failure;assert.deepEqual(failure,{kind:'model',diagnostic:{category:'rate or usage limit',httpStatus:'429'},recoveryAction:'check-status'});assert.ok(!JSON.stringify(failure).includes('PRIVATE'));});
+
+test('fresh workspace notice and predecessor reference remain visible in live and saved cards',()=>{
+ const p=new ChatProjection();p.entry(assistant('a',[{id:'c',name:'workspace_read'}]));p.apply({type:'tool_execution_start',toolCallId:'c',toolName:'workspace_read',args:{path:'src/index.ts'}});
+ p.apply({type:'tool_execution_update',toolCallId:'c',toolName:'workspace_read',details:{workspaceActivation:'starting',workspaceFreshStart:true}} as never);assert.match(p.view().messages[0].tools[0].summary!,/Starting fresh.*Old edits were not restored/);
+ const result=resultEntry('c','workspace_read',{path:'src/index.ts',text:'source',freshWorkspace:{previousWorkspaceId:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',artifactUrl:'/api/workspaces/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa/artifact?session=1',notice:'Fresh workspace. Old edits were not restored.'}});
+ p.entry(result);let row=p.view().messages[0].tools[0];assert.match(row.summary!,/^Fresh workspace. Old edits were not restored/);assert.match(row.output!,/contents not verified/);assert.match(row.output!,/api\/workspaces/);
+ p.apply(snapshot([assistant('a',[{id:'c',name:'workspace_read'}]),result]));assert.equal(p.view().messages[0].tools[0].summary,row.summary);assert.equal(p.view().messages[0].tools[0].output,row.output);
+});

@@ -11,7 +11,7 @@ test('actual SDK persists automatic startup details for a reconnecting tool card
  const faux=fauxProvider();faux.setResponses([fauxAssistantMessage([fauxToolCall('workspace_exec',{argv:['npm','test']},{id:'auto'})],{stopReason:'toolUse'}),fauxAssistantMessage([fauxText('Recorded run started.')])]);
  const models=createModels();models.setProvider(faux.provider);const registry=createRegistry();registry.install(workspaceTools({request:async(_session,_request,progress)=>{await progress!('starting');entered();await hold;await progress!('ready');return {phase:'ready'};}}));
  const h=await Harness.open(new MemoryStorage(),{models,registry},context);try{const root=await h.root(context,{agent:{model:{provider:'faux',modelId:'faux-1'}}});const submission=await root.submit({type:'input',content:'Run the local synthetic command',requestId:'offline-startup-details'},context);await started;
-  const events=await watchEvents(h,root.id,context);try{assert.deepEqual(events.snapshot.tools.find(t=>t.callId==='auto')?.details,{workspaceActivation:'starting'});}finally{await events.stop();}
+  const events=await watchEvents(h,root.id,context);try{assert.deepEqual(events.snapshot.tools.find(t=>t.callId==='auto')?.details,{workspaceActivation:'starting',workspaceFreshStart:false});}finally{await events.stop();}
   release();assert.equal((await submission.wait(context)).status,'done');
  }finally{release();await h.close(context);}
 });

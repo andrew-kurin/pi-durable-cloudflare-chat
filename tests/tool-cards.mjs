@@ -269,7 +269,8 @@ try {
     const row = page.locator(".tool-row");
     assert.equal(await row.count(), 1);
     assert.ok((await row.locator("summary").textContent()).includes(label));
-    if(phase === "failed") assert.equal(await row.getAttribute("data-state"), "error");
+    if (phase === "failed")
+      assert.equal(await row.getAttribute("data-state"), "error");
     for (const width of [320, 390, 1280]) {
       await page.setViewportSize({ width, height: 844 });
       assert.equal(
@@ -308,6 +309,94 @@ try {
     await page.locator(".tool-row[data-state=error]>summary").textContent(),
     /Workspace startup failed/,
   );
+  const fresh = new ChatProjection();
+  fresh.entry({
+    id: "fresh",
+    kind: "pi.assistant",
+    model: [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "fresh-call",
+            name: "workspace_read",
+            arguments: { path: "src/index.ts" },
+          },
+        ],
+      },
+    ],
+  });
+  fresh.apply({
+    type: "tool_execution_start",
+    toolCallId: "fresh-call",
+    toolName: "workspace_read",
+    args: { path: "src/index.ts" },
+  });
+  fresh.apply({
+    type: "tool_execution_update",
+    toolCallId: "fresh-call",
+    toolName: "workspace_read",
+    details: { workspaceActivation: "starting", workspaceFreshStart: true },
+  });
+  await page.evaluate(
+    (v) => window.streams.at(-1).onmessage({ data: JSON.stringify(v) }),
+    { ...fresh.view(), historyProtocol: 2 },
+  );
+  assert.match(
+    await page.locator(".tool-row>summary").textContent(),
+    /Starting fresh.*Old edits were not restored/,
+  );
+  await page.screenshot({ path: out + "/workspace-fresh-starting.png" });
+  fresh.entry({
+    id: "fresh-result",
+    kind: "pi.tool-result",
+    model: [
+      {
+        role: "toolResult",
+        toolCallId: "fresh-call",
+        toolName: "workspace_read",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              data: {
+                text: "export const synthetic = true;",
+                freshWorkspace: {
+                  previousWorkspaceId: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
+                  artifactUrl:
+                    "/api/workspaces/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa/artifact?session=1",
+                },
+              },
+            }),
+          },
+        ],
+      },
+    ],
+  });
+  await page.evaluate(
+    (v) => window.streams.at(-1).onmessage({ data: JSON.stringify(v) }),
+    { ...fresh.view(), historyProtocol: 2 },
+  );
+  assert.match(
+    await page.locator(".tool-row>summary").textContent(),
+    /Fresh workspace. Old edits were not restored/,
+  );
+  await page.locator(".tool-row>summary").click();
+  assert.match(
+    await page.locator(".tool-output").textContent(),
+    /contents not verified/,
+  );
+  for (const width of [320, 390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+      true,
+    );
+    await page.screenshot({ path: out + "/workspace-fresh-" + width + ".png" });
+  }
   assert.equal(modelCalls, 0);
   assert.deepEqual(errors, []);
   await writeFile(

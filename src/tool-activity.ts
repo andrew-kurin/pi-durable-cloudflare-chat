@@ -314,7 +314,24 @@ export function resultSummary(
         : typeof record?.body === "string"
           ? record.body
           : data;
-  const value = display(visible);
+  const fresh =
+    _name.startsWith("workspace_") &&
+    record?.freshWorkspace &&
+    typeof record.freshWorkspace === "object"
+      ? (record.freshWorkspace as Record<string, unknown>)
+      : undefined;
+  const freshness = fresh
+    ? "Fresh workspace. Old edits were not restored."
+    : "";
+  const value = display(
+    fresh
+      ? display(visible).text +
+          "\n\n" +
+          freshness +
+          "\nPrevious artifact reference (contents not verified): " +
+          safeMetadata(fresh.artifactUrl, 300)
+      : visible,
+  );
   const diagnostic = diagnostics
     ?.slice(0, 8)
     .map((d) =>
@@ -374,10 +391,11 @@ export function resultSummary(
     state,
     detail,
     summary:
-      summary ||
-      (state === "success"
-        ? "Completed with no text output."
-        : stateDetail(state)),
+      (freshness ? freshness + " " : "") +
+      (summary ||
+        (state === "success"
+          ? "Completed with no text output."
+          : stateDetail(state))),
     output: output.text,
     ...(value.truncated || output.truncated ? { outputTruncated: true } : {}),
     ...(sources.length ? { sources } : {}),

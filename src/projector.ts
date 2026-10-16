@@ -69,10 +69,24 @@ export class ChatProjection {
       details && typeof details === "object" && "workspaceActivation" in details
         ? details.workspaceActivation
         : undefined;
-    if (phase === "starting") row.summary = "Starting workspace…";
-    if (phase === "ready") row.summary = "Workspace ready. Running tool…";
+    const fresh = !!(
+      details &&
+      typeof details === "object" &&
+      "workspaceFreshStart" in details &&
+      details.workspaceFreshStart === true
+    );
+    if (phase === "starting")
+      row.summary = fresh
+        ? "Starting fresh workspace… Old edits were not restored."
+        : "Starting workspace…";
+    if (phase === "ready")
+      row.summary = fresh
+        ? "Fresh workspace ready. Old edits were not restored."
+        : "Workspace ready. Running tool…";
     if (phase === "failed") {
-      row.summary = "Workspace activation failed.";
+      row.summary = fresh
+        ? "Fresh workspace startup failed. Previous workspace retained."
+        : "Workspace activation failed.";
       row.state = "error";
       row.detail = "Workspace did not start; no tool operation ran.";
     }

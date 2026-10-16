@@ -137,6 +137,7 @@ function fixture() {
       await guests.get(id)!.controller.tick();
     },
     hold() {
+      entered = deferred();
       gate = deferred();
       return { entered: entered.promise, release: gate.resolve };
     },
@@ -236,7 +237,7 @@ test("status/log/export/artifact observations never start a guest, and foreign o
   );
   assert.equal(f.counts.opens, 1);
 });
-test("only untouched naturally expired guests can be replaced; old artifacts remain owned", async () => {
+test("closed expired guests can start fresh while old artifacts remain owned", async () => {
   const f = fixture();
   await f.coordinator.open("1", oldId);
   await f.coordinator.execute("1", {
@@ -274,28 +275,24 @@ test("only untouched naturally expired guests can be replaced; old artifacts rem
     await g.coordinator.open("1", oldId);
     await g.coordinator.execute("1", { ...action, operationId: op(1) } as any);
     await g.expire(oldId);
-    await assert.rejects(
-      g.coordinator.execute("1", {
-        action: "read",
-        path: "a",
-        operationId: op(2),
-      }),
-      /closed/,
-    );
-    assert.equal(g.counts.opens, 1);
+    const result = (await g.coordinator.execute("1", {
+      action: "read",
+      path: "a",
+      operationId: op(2),
+    })) as any;
+    assert.equal(result.freshWorkspace.previousWorkspaceId, oldId);
+    assert.equal(g.counts.opens, 2);
   }
   const legacy = fixture();
   await legacy.coordinator.open("1", oldId);
   legacy.guests.get(oldId)!.data.get("state").untouched = undefined;
   await legacy.expire(oldId);
-  await assert.rejects(
-    legacy.coordinator.execute("1", {
-      action: "read",
-      path: "a",
-      operationId: op(1),
-    }),
-    /closed/,
-  );
+  const result = (await legacy.coordinator.execute("1", {
+    action: "read",
+    path: "a",
+    operationId: op(1),
+  })) as any;
+  assert.equal(result.freshWorkspace.previousWorkspaceId, oldId);
 });
 test("startup failure and interrupted initialization never clone or dispatch again automatically", async () => {
   const f = fixture();
@@ -559,4 +556,125 @@ test("cancellation during automatic replacement reservation prevents a new guest
   assert.equal(f.counts.opens, 1);
   assert.equal(f.counts.dispatches, 0);
   assert.equal(f.data.get("workspace-session:1"), oldId);
+});
+test("legacy closed guest from conversation 293 starts fresh without restoring or overwriting its predecessor", async () => {
+  const f = fixture();
+  await f.coordinator.open("1", oldId);
+  await f.coordinator.execute("1", {
+    action: "exec",
+    argv: ["ls"],
+    operationId: op(1),
+  });
+  await f.expire(oldId);
+  const state = f.guests.get(oldId)!.data.get("state");
+  delete state.untouched;
+  delete state.stopReason;
+  const before = structuredClone(f.guests.get(oldId)!.data),
+    phases: any[] = [];
+  const result = (await f.coordinator.execute(
+    "1",
+    { action: "read", path: "src/index.ts", operationId: op(2) },
+    async (phase, fresh) => {
+      phases.push([phase, fresh]);
+    },
+  )) as any;
+  const next = f.data.get("workspace-session:1");
+  assert.notEqual(next, oldId);
+  assert.equal(result.text, "source");
+  assert.equal(result.freshWorkspace.previousWorkspaceId, oldId);
+  assert.match(result.freshWorkspace.notice, /Old edits were not restored/);
+  assert.match(result.freshWorkspace.artifactUrl, new RegExp(oldId));
+  assert.deepEqual(f.guests.get(oldId)!.data, before);
+  assert.deepEqual(phases, [
+    ["starting", true],
+    ["ready", true],
+  ]);
+  assert.equal(f.data.get("workspace-owner:" + oldId), "1");
+  assert.equal((await f.coordinator.artifact("1", oldId)).patch, "saved patch");
+  await assert.rejects(
+    f.coordinator.execute("1", {
+      action: "read",
+      workspaceId: oldId,
+      path: "a",
+      operationId: op(3),
+    }),
+    /explicit|closed/i,
+  );
+  const retry = (await f.create().execute("1", {
+    action: "read",
+    path: "src/index.ts",
+    operationId: op(2),
+  })) as any;
+  assert.equal(retry.freshWorkspace.previousWorkspaceId, oldId);
+  assert.equal(f.counts.opens, 2);
+  assert.equal(f.counts.reads, 1);
+});
+test("concurrent tools share a fresh successor and its durable predecessor reference", async () => {
+  const f = fixture();
+  await f.coordinator.open("1", oldId);
+  await f.expire(oldId);
+  const gate = f.hold();
+  const a = f.coordinator.execute("1", {
+    action: "read",
+    path: "a",
+    operationId: op(1),
+  });
+  await gate.entered;
+  const b = f.coordinator.execute("1", {
+    action: "read",
+    path: "b",
+    operationId: op(2),
+  });
+  gate.release();
+  const results = (await Promise.all([a, b])) as any[];
+  assert.equal(f.counts.opens, 2);
+  assert.ok(
+    results.every((r) => r.freshWorkspace.previousWorkspaceId === oldId),
+  );
+  assert.equal(
+    (await f.create().current("1")).predecessor?.previousWorkspaceId,
+    oldId,
+  );
+});
+test("cancelled or failed fresh startup retains the predecessor without dispatch or repeated cloning", async () => {
+  for (const cancel of [true, false]) {
+    const f = fixture();
+    await f.coordinator.open("1", oldId);
+    await f.expire(oldId);
+    const before = structuredClone(f.guests.get(oldId)!.data);
+    let gate: ReturnType<typeof f.hold> | undefined;
+    if (cancel) gate = f.hold();
+    else f.failOpen();
+    const input = {
+      action: "exec" as const,
+      argv: ["npm", "test"],
+      operationId: op(1),
+    };
+    const running = f.coordinator.execute("1", input);
+    const rejected = assert.rejects(
+      running,
+      /retained.*contents were not verified/,
+    );
+    if (cancel) {
+      await gate!.entered;
+      await f.coordinator.ownerAction(
+        "1",
+        f.data.get("workspace-session:1"),
+        "cancel",
+        op(2),
+      );
+      gate!.release();
+    }
+    await rejected;
+    assert.equal(f.counts.dispatches, 0);
+    assert.deepEqual(f.guests.get(oldId)!.data, before);
+    assert.equal(
+      (await f.create().current("1")).predecessor?.previousWorkspaceId,
+      oldId,
+    );
+    await assert.rejects(
+      f.create().execute("1", { ...input, operationId: op(3) }),
+    );
+    assert.equal(f.counts.opens, 2);
+  }
 });
