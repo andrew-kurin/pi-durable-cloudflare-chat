@@ -2,7 +2,7 @@
 
 This feature is disabled by default and has not been deployed. The existing production configuration, model/auth loop, domain and deployment workflow are unchanged. Sol stays in Pi Durable; a separate task-scoped `TaskWorkspace` Durable Object owns the guest and its lifecycle. The guest contains Node, Git, Python and normal build utilities, with no second model, application credentials, GitHub write/deployment tokens or mounted production state.
 
-The owner explicitly opens one disposable workspace for the configured trusted public `WORKSPACE_REPOSITORY` (`owner/repository`). The app admits one active owner workspace across conversations. It clones anonymously and saves the resolved initial commit as the immutable export base. Tools are registered only when the feature, namespace, project and image are configured. They select only a workspace approved for the calling conversation:
+The owner can explicitly open a disposable workspace for the configured trusted public `WORKSPACE_REPOSITORY` (`owner/repository`). When tools are enabled, `workspace_read`, `workspace_edit` and `workspace_exec` also activate it automatically when safe. The app admits one active owner workspace across conversations. It clones anonymously and saves the resolved initial commit as the immutable export base. Tools are registered only when the feature, namespace, project and image are configured. They select only a workspace approved for the calling conversation:
 
 | Tool | Behavior |
 | --- | --- |
@@ -15,6 +15,16 @@ The owner explicitly opens one disposable workspace for the configured trusted p
 | `workspace_export` | Save an immutable base-relative binary patch and available logs for owner review. |
 
 Read/edit/new commands wait for the active command to finish. Export requires a quiet workspace. File adapters restrict relative paths and resolved paths to the project and exclude direct `.git` edits. This is intended for the owner's trusted project, not arbitrary hostile repositories. Internet access permits public cloning and package installation. V1 does not add an elaborate network policy layer. External publication, deployment or security-setting changes still require explicit owner approval; the guest has no write/deploy credentials. There are no previews, snapshots, automated PRs or parallel workspace agents.
+
+## Automatic activation
+
+`WorkspaceCoordinator` owns activation policy for all three workspace-dependent tools. It reuses a ready guest and joins an existing startup rather than cloning twice. The original tool operation runs only after setup is ready. The tool card displays **Starting workspace…**, then **Workspace ready. Running tool…**; setup failures report that no tool operation ran and require an explicit owner open to retry. Status, logs, exports and artifact downloads never start a guest.
+
+A closed guest has no resumable filesystem. Automatic replacement is permitted only for a guest recorded as untouched that closed through natural expiry. Reads alone are safe; any edit attempt or command dispatch marks it potentially changed before touching the guest. Explicit cancellation, interrupted/failed setup and older records with unknown history all refuse automatic replacement. The owner must review saved artifacts and explicitly open a fresh guest. Old guest ownership and immutable exports remain available after replacement.
+
+The coordinator durably binds each activating operation ID and input fingerprint to its first workspace before dispatch. Retries stay pinned to that identity even after a new workspace is opened; the guest journal decides whether to return a prior receipt or reject an interrupted operation. The coordinator never retries a dispatched command. Cancellation records a durable stop generation for the current guest; reservation and pre-dispatch checks prevent pending activation from undoing it, even across a later manual reopen. Cancelling an older guest cannot block a newer one. Explicit owner opening is the only way to clear the stop intent.
+
+New additive Assistant keys are `workspace-activation-op:<session>:<operationId>` and `workspace-auto-stop:<session>`. Existing identity mappings, guest journals, quotas, owner authorization and external-change approvals remain in force. Startup sharing is local to the coordinator instance; after reconstruction the guest controller remains the authority for interrupted initialization rather than silently recloning.
 
 ## Lifecycle and limits
 

@@ -5,14 +5,16 @@ import { HistoryFeed } from "../src/history-feed";
 import { WorkspaceCoordinator } from "../src/workspace-coordinator";
 function store() {
   const data = new Map<string, unknown>();
-  return {
+  const storage = {
     data,
     get: async <T>(key: string) => data.get(key) as T | undefined,
     put: async (key: string, value: unknown) => {
       data.set(key, value);
     },
     delete: async (key: string) => data.delete(key),
+    transaction: async (work: any) => work(storage),
   };
+  return storage;
 }
 test("catalog scans all pages, rejects delegated chats and keeps metadata precedence private", async () => {
   const s = store();

@@ -48,7 +48,11 @@ export class ChatProjection {
       if (messageId) prior.messageId = messageId;
       return prior;
     }
-    const row = {
+    const row: ToolActivity & {
+      messageId?: string;
+      resultId?: string;
+      name: string;
+    } = {
       id,
       name,
       label: toolLabel(name),
@@ -58,6 +62,20 @@ export class ChatProjection {
     };
     this.tools.set(id, row);
     return row;
+  }
+  private activation(row: ToolActivity, details: unknown) {
+    if (["success", "error", "interrupted"].includes(row.state)) return;
+    const phase =
+      details && typeof details === "object" && "workspaceActivation" in details
+        ? details.workspaceActivation
+        : undefined;
+    if (phase === "starting") row.summary = "Starting workspace…";
+    if (phase === "ready") row.summary = "Workspace ready. Running tool…";
+    if (phase === "failed") {
+      row.summary = "Workspace activation failed.";
+      row.state = "error";
+      row.detail = "Workspace did not start; no tool operation ran.";
+    }
   }
   private calls(entry: EntryRecord) {
     for (const m of entry.model ?? [])
@@ -147,6 +165,7 @@ export class ChatProjection {
       for (const row of this.tools.values())
         if (row.state === "pending") {
           row.state = "unavailable";
+          delete row.summary;
           row.detail = stateDetail(row.state);
         }
       for (const slot of e.tools) {
@@ -154,10 +173,11 @@ export class ChatProjection {
         if (row && slot.status !== "done") {
           row.state = slot.status;
           row.detail = stateDetail(row.state);
+          this.activation(row, slot.details);
         }
       }
-      this.activity = e.tools.some(
-        (t) => t.status === "pending" || t.status === "running",
+      this.activity = [...this.tools.values()].some(
+        (t) => t.state === "pending" || t.state === "running",
       )
         ? "Reading sources or working with Luna…"
         : "";
@@ -171,6 +191,7 @@ export class ChatProjection {
       for (const row of this.tools.values())
         if (row.state === "pending" || row.state === "running") {
           row.state = "unavailable";
+          delete row.summary;
           row.detail = stateDetail(row.state);
         }
       this.busy = false;
@@ -207,6 +228,16 @@ export class ChatProjection {
       this.partial = {};
     }
     if (e.type === "entry_appended") this.entry(e.entry);
+    if (e.type === "tool_execution_update") {
+      const row = this.tools.get(e.toolCallId);
+      if (row) this.activation(row, e.details);
+      if (
+        ![...this.tools.values()].some(
+          (t) => t.state === "pending" || t.state === "running",
+        )
+      )
+        this.activity = "";
+    }
     if (e.type === "tool_execution_start") {
       const row = this.tool(e.toolCallId, e.toolName, "running");
       if (row && !["success", "error", "interrupted"].includes(row.state))
@@ -233,6 +264,7 @@ export class ChatProjection {
         const row = this.tool(e.toolCallId, e.toolName, "unavailable");
         if (row && !["success", "error", "interrupted"].includes(row.state)) {
           row.state = "unavailable";
+          delete row.summary;
           row.detail = stateDetail(row.state);
         }
       }
