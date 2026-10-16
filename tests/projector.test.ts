@@ -92,3 +92,7 @@ test('fresh workspace notice and predecessor reference remain visible in live an
  p.entry(result);let row=p.view().messages[0].tools[0];assert.match(row.summary!,/^Fresh workspace. Old edits were not restored/);assert.match(row.output!,/contents not verified/);assert.match(row.output!,/api\/workspaces/);
  p.apply(snapshot([assistant('a',[{id:'c',name:'workspace_read'}]),result]));assert.equal(p.view().messages[0].tools[0].summary,row.summary);assert.equal(p.view().messages[0].tools[0].output,row.output);
 });
+test('workspace status card distinguishes normal absent workspace from a missing process',()=>{
+ const p=new ChatProjection();p.entry(assistant('a',[{id:'c',name:'workspace_status'}]));p.entry(resultEntry('c','workspace_status',{phase:'absent',runs:{},process:{state:'none'},activation:{mode:'automatic',nextStep:'Use workspace_read without workspaceId'}}));let row=p.view().messages[0].tools[0];assert.equal(row.label,'Workspace status');assert.equal(row.state,'success');assert.match(row.summary!,/Workspace absent.*No active process.*activates automatically/);
+ p.entry(resultEntry('c','workspace_status',{phase:'ready',runs:{},process:{state:'not_found',runId:'old-run'},activation:{mode:'ready'}}));row=p.view().messages[0].tools[0];assert.match(row.summary!,/Requested process not found/);assert.ok(!row.summary!.includes('Process running'));
+});

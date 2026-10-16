@@ -15,3 +15,15 @@ test('actual SDK persists automatic startup details for a reconnecting tool card
   release();assert.equal((await submission.wait(context)).status,'done');
  }finally{release();await h.close(context);}
 });
+test('actual SDK carries actionable closed status and automatic instructions into the next tool round',async()=>{
+ const {WorkspaceCoordinator}=await import('../src/workspace-coordinator');const oldId='711bc717-8727-4e39-9c6b-49f9f1975943';let opens=0,reads=0;
+ const data=new Map<string,any>([['workspace-session:1',oldId],['workspace-owner:'+oldId,'1'],['workspace-active',oldId]]);
+ const store={get:async(k:string)=>data.get(k),put:async(k:string,v:any)=>{data.set(k,v);},transaction:async(fn:any)=>fn(store)};
+ const coordinator=new WorkspaceCoordinator(store as any,{ENABLE_WORKSPACE:'true',WORKSPACE_IMAGE:'fixture',WORKSPACE_REPOSITORY:'owner/project',Workspaces:{getByName:(id:string)=>({open:async()=>{opens++;return {id,phase:'ready',runs:{}};},request:async(r:any)=>{if(r.action==='status')return {id,phase:id===oldId?'closed':'ready',runs:{},canAutoReplace:false};if(r.action==='read'){reads++;return {text:'local source'};}throw Error('Unexpected operation');}})}} as any,async()=>{});
+ const faux=fauxProvider();faux.setResponses([
+  transcript=>{assert.match(JSON.stringify(transcript.messages),/An absent or closed status alone is not a blocker/);return fauxAssistantMessage([fauxToolCall('workspace_status',{}, {id:'preflight'})],{stopReason:'toolUse'});},
+  transcript=>{const result=transcript.messages.find(m=>m.role==='toolResult') as any;const value=JSON.parse(result.content.find((c:any)=>c.type==='text').text).data;assert.equal(value.phase,'closed');assert.equal(value.canAutoReplace,true);assert.equal(value.activation.mode,'automatic');assert.match(value.activation.nextStep,/omit workspaceId/);assert.equal(opens,0);return fauxAssistantMessage([fauxToolCall('workspace_read',{path:'package.json'},{id:'read-current'})],{stopReason:'toolUse'});},
+  fauxAssistantMessage([fauxText('Read the fresh project. Old edits were not restored.')])]);
+ const models=createModels();models.setProvider(faux.provider);const registry=createRegistry();registry.install(workspaceTools({request:(session,r,progress)=>coordinator.execute(session,r,progress)}));
+ const h=await Harness.open(new MemoryStorage(),{models,registry},context);try{const root=await h.root(context,{agent:{model:{provider:'faux',modelId:'faux-1'}}});const done=await(await root.submit({type:'input',content:'Review the current project',requestId:'offline-status-guidance'},context)).wait(context);assert.equal(done.status,'done');assert.equal(opens,1);assert.equal(reads,1);}finally{await h.close(context);}
+});
