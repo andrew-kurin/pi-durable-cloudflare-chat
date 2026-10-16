@@ -97,8 +97,11 @@ export async function waitForWorkspaceRun(
   });
   while (true) {
     options.signal?.throwIfAborted();
+    // A completed sleep can consume the budget. Keep the last verified running
+    // observation rather than starting an RPC that would race a zero-ms timer.
+    const left = deadline - now();
+    if (left <= 0) return result(latest ? "still_running" : "unavailable");
     // Bound even a slow status RPC. No coordinator/lifecycle lock is held while waiting.
-    const left = Math.max(0, deadline - now());
     let timer: ReturnType<typeof setTimeout> | undefined;
     let abort: () => void = () => {};
     try {
