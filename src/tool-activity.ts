@@ -195,6 +195,7 @@ const labels: Record<string, string> = {
   workspace_edit: "Edit file",
   workspace_exec: "Start command",
   workspace_status: "Workspace status",
+  workspace_wait: "Wait for command",
   workspace_logs: "Read logs",
   workspace_cancel: "Cancel workspace",
   workspace_export: "Export patch",
@@ -406,6 +407,29 @@ export function resultSummary(
           : mode === "explicit_target_closed"
             ? "Explicit target remains closed."
             : "");
+  }
+  if (_name === "workspace_wait" && record) {
+    const outcome = record.outcome;
+    summary =
+      outcome === "completed"
+        ? "Command completed. Continue requested work."
+        : outcome === "still_running"
+          ? (typeof record.commandRemainingMs === "number" &&
+            Number.isFinite(record.commandRemainingMs)
+              ? Math.ceil(Math.max(0, record.commandRemainingMs) / 1000) +
+                "s remaining. "
+              : "") + "Command still running. Wait again; work is not complete."
+          : outcome === "failed"
+            ? "Command failed; inspect recorded logs."
+            : outcome === "not_found"
+              ? "Existing run not found; no command started."
+              : outcome === "stopped" ||
+                  outcome === "stopping" ||
+                  outcome === "interrupted"
+                ? outcome === "stopping"
+                  ? "Cancellation or cleanup in progress; no replay."
+                  : "Command or workspace stopped; no replay."
+                : "Existing command status unavailable.";
   }
   let detail = stateDetail(state);
   if (data && typeof data === "object" && (data as any).truncated === true)

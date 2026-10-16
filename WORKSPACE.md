@@ -9,7 +9,8 @@ The owner can explicitly open a disposable workspace for the configured trusted 
 | `workspace_read` | Read a bounded UTF-8 project file. |
 | `workspace_edit` | Replace exactly one matching occurrence, or create a new file with an empty old value. |
 | `workspace_exec` | Start one serial argv command and return a durable run ID. A shell is explicit argv, such as `sh -c`. |
-| `workspace_status` | Read recorded/live process state and deadlines without restarting work. |
+| `workspace_status` | Read recorded/live process state and deadlines immediately without restarting work. |
+| `workspace_wait` | Observe one explicit workspace/run for 10–30 seconds (default 20), returning early on completion, failure or stop; never creates a guest or starts/replays work. |
 | `workspace_logs` | Return the last 16 KiB of a recorded stdout/stderr stream. |
 | `workspace_cancel` | Signal the process group, then stop the entire guest after bounded grace. |
 | `workspace_export` | Save an immutable base-relative binary patch and available logs for owner review. |
@@ -28,6 +29,12 @@ The coordinator durably binds each activating operation ID and input fingerprint
 
 New additive Assistant keys are `workspace-activation-op:<session>:<operationId>` and `workspace-auto-stop:<session>`, plus the predecessor reference above. Existing identity mappings, guest journals, quotas, owner authorization and external-change approvals remain in force. Startup sharing is local to the coordinator instance; after reconstruction the guest controller remains the authority for interrupted initialization rather than silently recloning.
 
+## Waiting for commands
+
+Use `workspace_wait` with the workspace UUID and durable run ID returned by exec for a running command. One call waits up to 20 seconds by default, optionally 10–30 seconds, checking state internally about every two seconds. An invocation memo retains its deadline across tool recovery, and explicit IDs prevent retargeting if the conversation later gets a fresh guest. Missing/stale runs never create a guest or a process. Ordinary status and the UI's 15-second polling remain immediate.
+
+The result distinguishes successful completion (exit 0), failure, interruption, stopping/closed state, unavailable status and `still_running`, with observed time, actual remaining task/command milliseconds and an explicit next step. A timed-out wait is not completion of the owner's work: wait again, then continue requested dependent work (such as `npm test` after installation succeeds). Read logs for failures or useful output rather than repeatedly fetching empty streams. Cancellation aborts local waiting, and owner workspace cancellation/alarms remain independently admitted; no execution/lifecycle queue is held while sleeping. A status RPC already dispatched before timeout/abort may still finish under the existing controller bounds, including ordinary lifecycle enforcement. No event framework or automatic dependent command dispatch is added.
+
 ## Lifecycle and limits
 
 Run IDs and operation fingerprints are saved before dispatch. Duplicate exec requests report the existing run; reconnect asks for status/logs. SDK recovery marks arbitrary execution/edit/export as unsafe rather than replaying it. A missing PID, changed boot ID, missing exit record or ambiguous dispatch becomes interrupted. The app never silently restarts a command or lost container. Start a new task or issue an explicit new command after reviewing available work.
@@ -37,7 +44,7 @@ Run IDs and operation fingerprints are saved before dispatch. Duplicate exec req
 | Task deadline: 90 minutes | Enough time for a normal edit/build/test loop without an open-ended guest. |
 | Command deadline: 30 minutes | Accommodates installs and quiet builds; an individual command may request up to 120 minutes, capped by the task deadline. |
 | Idle cleanup: 15 minutes | Allows reading results and deciding the next step. A running process is active even if its logs are quiet. Completion starts a fresh idle window. |
-| Warning: 5 minutes before a limit | Gives time to use explicit owner extension controls. |
+| Warning window: smaller of configured 5 minutes or 20% of allotted task/command time | Avoids warning immediately on a five-minute command; includes actual seconds remaining and allows explicit owner extensions. |
 | Graceful cancellation: 10 seconds | Allows termination and final writes before whole-container shutdown. |
 | Final artifact budget: 20 seconds | A failed or hung export cannot keep compute alive indefinitely. |
 | Ordinary adapter operation: 30 seconds; setup: 5 minutes | Setup permits a realistic public clone without thrashing. |

@@ -839,3 +839,51 @@ test("closed legacy process records are historical interrupted observations, nev
   assert.equal(state.runs[op(1)].state, "running");
   assert.equal(f.counts.opens, 1);
 });
+test("waiting through coordinator does not block cancellation, regular status or guest lifecycle", async () => {
+  const { waitForWorkspaceRun } = await import("../src/workspace-wait");
+  const f = fixture();
+  await f.coordinator.execute("1", {
+    action: "exec",
+    argv: ["npm", "ci"],
+    operationId: op(1),
+  });
+  const id = f.data.get("workspace-session:1");
+  const guest = f.guests.get(id)!.controller;
+  // Keep this native fixture process running until cancellation, independently of the waiter.
+  const state = f.guests.get(id)!.data.get("state");
+  state.active = op(1);
+  state.runs[op(1)].state = "running";
+  const original = guest.request.bind(guest);
+  let held = true;
+  guest.request = async (r: any) =>
+    r.action === "status" && held
+      ? { ...structuredClone(state), process: undefined }
+      : original(r);
+  let checked = 0;
+  const result = await waitForWorkspaceRun(
+    () =>
+      f.coordinator.execute("1", {
+        action: "status",
+        workspaceId: id,
+        runId: op(1),
+        operationId: op(2),
+      }),
+    { workspaceId: id, runId: op(1) },
+    {
+      now: () => checked * 2000,
+      sleep: async () => {
+        checked++;
+        const immediate = (await f.coordinator.status("1", id)) as any;
+        assert.equal(immediate.phase, "ready");
+        held = false;
+        await f.coordinator.ownerAction("1", id, "cancel", op(3));
+      },
+    },
+  );
+  assert.equal(result.outcome, "stopping");
+  assert.equal(checked, 1);
+  assert.equal(f.counts.dispatches, 1);
+  assert.equal(f.counts.opens, 1);
+  await f.expire(id);
+  assert.equal(((await f.coordinator.status("1", id)) as any).phase, "closed");
+});
