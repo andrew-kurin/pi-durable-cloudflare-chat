@@ -18,7 +18,13 @@ const statusRequest = (workspaceId: string) => ({
 type State = Awaited<ReturnType<TaskWorkspace["open"]>>;
 export type WorkspaceProgress = (
   phase: "starting" | "ready" | "failed",
+  fresh?: boolean,
 ) => Promise<void>;
+type Predecessor = {
+  previousWorkspaceId: string;
+  artifactUrl: string;
+  notice: string;
+};
 type Binding = { workspaceId: string; fingerprint: string };
 export class WorkspaceCoordinator {
   private tail: Promise<unknown> = Promise.resolve();
@@ -98,7 +104,12 @@ export class WorkspaceCoordinator {
       );
     }
   }
-  private async reserve(session: string, id: string, manual: boolean) {
+  private async reserve(
+    session: string,
+    id: string,
+    manual: boolean,
+    predecessor?: Predecessor,
+  ) {
     const intent = await this.stopped(session);
     const old = await this.store.get<string>("workspace-session:" + session);
     if (old && old !== id) {
@@ -137,6 +148,7 @@ export class WorkspaceCoordinator {
           ...(latest?.epoch ? { epoch: latest.epoch } : {}),
           blocked: false,
         });
+      if (predecessor) await tx.put("workspace-predecessor:" + id, predecessor);
       await tx.put("workspace-active", id);
       await tx.put("workspace-owner:" + id, session);
       await tx.put("workspace-session:" + session, id);
@@ -175,15 +187,21 @@ export class WorkspaceCoordinator {
   }
   async current(session: string) {
     this.ensureEnabled();
-    return {
-      workspaceId: await this.store.get<string>("workspace-session:" + session),
-    };
+    const workspaceId = await this.store.get<string>(
+      "workspace-session:" + session,
+    );
+    const predecessor = workspaceId
+      ? await this.store.get<Predecessor>(
+          "workspace-predecessor:" + workspaceId,
+        )
+      : undefined;
+    return { workspaceId, ...(predecessor ? { predecessor } : {}) };
   }
   async execute(
     session: string,
     input: WorkspaceToolRequest,
     progress?: WorkspaceProgress,
-  ) {
+  ): Promise<unknown> {
     this.ensureEnabled();
     const activates = ["read", "edit", "exec"].includes(input.action);
     if (!activates) {
@@ -219,6 +237,7 @@ export class WorkspaceCoordinator {
         input.workspaceId ??
         (await this.store.get<string>("workspace-session:" + session));
       let startup: Promise<State> | undefined;
+      let predecessor: Predecessor | undefined;
       if (id) {
         await this.owned(session, id);
         startup = this.starts.get(id);
@@ -226,11 +245,22 @@ export class WorkspaceCoordinator {
           const state = await this.state(id);
           if (state.phase === "initializing") startup = this.start(session, id);
           else if (state.phase === "closed" && !binding) {
-            if (input.workspaceId || state.canAutoReplace !== true)
+            if (
+              input.workspaceId ||
+              state.stopReason === "cancelled" ||
+              state.stopReason === "initialization-failed" ||
+              state.stopReason === "interrupted"
+            )
               throw new RequestError(
                 409,
                 "Previous workspace is closed and may contain work. Open a new workspace explicitly; saved artifacts remain available.",
               );
+            predecessor = {
+              previousWorkspaceId: id,
+              artifactUrl: `/api/workspaces/${id}/artifact?session=${session}`,
+              notice:
+                "Fresh workspace. Old edits were not restored. The previous workspace and artifact reference are retained; artifact contents were not verified.",
+            };
             id = undefined;
           } else if (state.phase === "stopping")
             throw new RequestError(
@@ -241,16 +271,23 @@ export class WorkspaceCoordinator {
       }
       if (!id) {
         id = crypto.randomUUID();
-        await this.reserve(session, id, false);
+        await this.reserve(session, id, false, predecessor);
         startup = this.start(session, id);
       }
       if (!binding) await this.store.put(key, { workspaceId: id, fingerprint });
-      return { id, startup, epoch: (await this.stopped(session))?.epoch };
+      return {
+        id,
+        startup,
+        predecessor:
+          predecessor ??
+          (await this.store.get<Predecessor>("workspace-predecessor:" + id)),
+        epoch: (await this.stopped(session))?.epoch,
+      };
     });
     let activating = !!plan.startup;
     try {
       if (plan.startup) {
-        await progress?.("starting");
+        await progress?.("starting", !!plan.predecessor);
         const state = await plan.startup;
         await this.cancelStarted(session, plan.id, true, { epoch: plan.epoch });
         if (state.phase !== "ready")
@@ -258,19 +295,28 @@ export class WorkspaceCoordinator {
             503,
             "Workspace startup failed; no tool operation ran. Open a workspace explicitly to try again.",
           );
-        await progress?.("ready");
+        await progress?.("ready", !!plan.predecessor);
         activating = false;
       }
       await this.cancelStarted(session, plan.id, true, { epoch: plan.epoch });
       // One dispatch, no automatic retries. The guest journal owns operation deduplication.
-      return await this.stub(plan.id).request({
+      const result = await this.stub(plan.id).request({
         ...input,
         workspaceId: plan.id,
       } as WorkspaceRequest);
+      return plan.predecessor
+        ? { ...(result as object), freshWorkspace: plan.predecessor }
+        : result;
     } catch (error) {
+      if (plan.predecessor && error instanceof Error)
+        error.message +=
+          " " +
+          plan.predecessor.notice +
+          " Previous artifact reference: " +
+          plan.predecessor.artifactUrl;
       if (activating)
         try {
-          await progress?.("failed");
+          await progress?.("failed", !!plan.predecessor);
         } catch {}
       throw error;
     }
