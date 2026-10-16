@@ -207,7 +207,6 @@ test("concurrent calls join one startup; duplicate commands dispatch exactly onc
 test("status/log/export/artifact observations never start a guest, and foreign owners are rejected", async () => {
   const f = fixture();
   for (const input of [
-    { action: "status" },
     { action: "logs", runId: op(1), stream: "stdout" },
     { action: "export" },
   ])
@@ -248,7 +247,7 @@ test("closed expired guests can start fresh while old artifacts remain owned", a
   await f.expire(oldId);
   assert.equal(
     ((await f.coordinator.status("1", oldId)) as any).canAutoReplace,
-    true,
+    false,
   );
   await assert.rejects(
     f.coordinator.execute("1", {
@@ -677,4 +676,166 @@ test("cancelled or failed fresh startup retains the predecessor without dispatch
     );
     assert.equal(f.counts.opens, 2);
   }
+});
+test("saved closed-status pattern guides a normal read into fresh activation without opening on status", async () => {
+  const f = fixture();
+  await f.coordinator.open("1", oldId);
+  await f.coordinator.execute("1", {
+    action: "exec",
+    argv: ["ls"],
+    operationId: op(1),
+  });
+  await f.expire(oldId);
+  const state = f.guests.get(oldId)!.data.get("state");
+  delete state.untouched;
+  delete state.stopReason;
+  const status = (await f.coordinator.execute("1", {
+    action: "status",
+    operationId: op(2),
+  })) as any;
+  assert.equal(status.phase, "closed");
+  assert.equal(status.canAutoReplace, true);
+  assert.equal(status.activation.mode, "automatic");
+  assert.match(status.activation.nextStep, /workspace_read/);
+  assert.match(status.activation.nextStep, /omit workspaceId/);
+  assert.equal(status.process.state, "none");
+  assert.equal(f.counts.opens, 1);
+  await f.coordinator.execute("1", {
+    action: "read",
+    path: "package.json",
+    operationId: op(3),
+  });
+  assert.equal(f.counts.opens, 2);
+});
+test("absent workspace is a normal actionable status; process lookup never creates or invents a run", async () => {
+  const f = fixture();
+  const status = (await f.coordinator.execute("1", {
+    action: "status",
+    operationId: op(1),
+  })) as any;
+  assert.equal(status.phase, "absent");
+  assert.equal(status.activation.mode, "automatic");
+  assert.equal(status.process.state, "none");
+  assert.deepEqual(status.runs, {});
+  const missing = (await f.coordinator.execute("1", {
+    action: "status",
+    runId: op(9),
+    operationId: op(2),
+  })) as any;
+  assert.equal(missing.process.state, "not_found");
+  assert.equal(missing.process.runId, op(9));
+  assert.equal(f.counts.opens, 0);
+});
+test("status distinguishes explicit history, stopped work and missing processes without undoing stops", async () => {
+  const f = fixture();
+  await f.coordinator.open("1", oldId);
+  await f.coordinator.execute("1", {
+    action: "exec",
+    argv: ["ls"],
+    operationId: op(1),
+  });
+  await f.expire(oldId);
+  const explicit = (await f.coordinator.execute("1", {
+    action: "status",
+    workspaceId: oldId,
+    runId: op(1),
+    operationId: op(2),
+  })) as any;
+  assert.equal(explicit.activation.mode, "explicit_target_closed");
+  assert.equal(explicit.process.state, "done");
+  assert.equal(explicit.process.id, op(1));
+  assert.equal(explicit.canAutoReplace, false);
+  const missing = (await f.coordinator.execute("1", {
+    action: "status",
+    runId: op(9),
+    operationId: op(3),
+  })) as any;
+  assert.equal(missing.process.state, "not_found");
+  assert.equal(missing.activation.mode, "automatic");
+  await f.coordinator.ownerAction("1", oldId, "cancel", op(4));
+  const stopped = (await f.coordinator.execute("1", {
+    action: "status",
+    operationId: op(5),
+  })) as any;
+  assert.equal(stopped.activation.mode, "owner_open");
+  assert.equal(stopped.canAutoReplace, false);
+  await assert.rejects(
+    f.coordinator.execute("1", {
+      action: "read",
+      path: "a",
+      operationId: op(6),
+    }),
+    /stopped/,
+  );
+  assert.equal(f.counts.opens, 1);
+});
+test("repeated owner UI status polling never opens a guest or creates a run", async () => {
+  const f = fixture();
+  await f.coordinator.open("1", oldId);
+  await f.expire(oldId);
+  for (let i = 0; i < 5; i++) {
+    const s = (await f.coordinator.status("1", oldId)) as any;
+    assert.equal(s.phase, "closed");
+    assert.equal(s.process.state, "none");
+    assert.deepEqual(s.runs, {});
+  }
+  assert.equal(f.counts.opens, 1);
+  assert.equal(f.counts.dispatches, 0);
+});
+test("explicit stopped current status requires owner open while an older cancelled target does not block new work", async () => {
+  const f = fixture();
+  await f.coordinator.open("1", oldId);
+  await f.coordinator.ownerAction("1", oldId, "cancel", op(1));
+  await f.expire(oldId);
+  const stopped = (await f.coordinator.execute("1", {
+    action: "status",
+    workspaceId: oldId,
+    operationId: op(2),
+  })) as any;
+  assert.equal(stopped.activation.mode, "owner_open");
+  assert.ok(!stopped.activation.nextStep.includes("omit workspaceId"));
+  const next = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
+  await f.coordinator.open("1", next);
+  const historical = (await f.coordinator.execute("1", {
+    action: "status",
+    workspaceId: oldId,
+    operationId: op(3),
+  })) as any;
+  assert.equal(historical.activation.mode, "explicit_target_closed");
+  assert.equal(historical.id, oldId);
+  const current = (await f.coordinator.execute("1", {
+    action: "status",
+    operationId: op(4),
+  })) as any;
+  assert.equal(current.id, next);
+  assert.equal(current.activation.mode, "ready");
+  assert.equal(f.counts.opens, 2);
+});
+test("closed legacy process records are historical interrupted observations, never live processes", async () => {
+  const f = fixture();
+  await f.coordinator.open("1", oldId);
+  await f.coordinator.execute("1", {
+    action: "exec",
+    argv: ["ls"],
+    operationId: op(1),
+  });
+  await f.expire(oldId);
+  const state = f.guests.get(oldId)!.data.get("state");
+  state.runs[op(1)].state = "running";
+  // Native status normally normalizes this; hold the serialized closed legacy record to test projection defensively.
+  const original = f.guests
+    .get(oldId)!
+    .controller.request.bind(f.guests.get(oldId)!.controller);
+  f.guests.get(oldId)!.controller.request = async (r: any) =>
+    r.action === "status" ? structuredClone(state) : original(r);
+  const result = (await f.coordinator.execute("1", {
+    action: "status",
+    runId: op(1),
+    operationId: op(2),
+  })) as any;
+  assert.equal(result.process.state, "interrupted");
+  assert.equal(result.runs[op(1)].state, "interrupted");
+  assert.equal(result.active, undefined);
+  assert.equal(state.runs[op(1)].state, "running");
+  assert.equal(f.counts.opens, 1);
 });

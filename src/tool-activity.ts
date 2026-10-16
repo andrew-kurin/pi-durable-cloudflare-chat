@@ -194,7 +194,7 @@ const labels: Record<string, string> = {
   workspace_read: "Read file",
   workspace_edit: "Edit file",
   workspace_exec: "Start command",
-  workspace_status: "Process status",
+  workspace_status: "Workspace status",
   workspace_logs: "Read logs",
   workspace_cancel: "Cancel workspace",
   workspace_export: "Export patch",
@@ -378,6 +378,34 @@ export function resultSummary(
       summary = safeMetadata(record.error, 220);
     else if (typeof record.text === "string")
       summary = safeMetadata(record.text, 220);
+  }
+  if (
+    _name === "workspace_status" &&
+    record &&
+    ["absent", "closed", "ready", "initializing", "stopping"].includes(
+      String(record.phase),
+    )
+  ) {
+    const mode = (record.activation as any)?.mode;
+    const process = (record.process as any)?.state;
+    summary =
+      "Workspace " +
+      record.phase +
+      ". " +
+      (process === "none"
+        ? "No active process. "
+        : process === "not_found"
+          ? "Requested process not found. "
+          : ["running", "dispatching", "done", "interrupted"].includes(process)
+            ? "Process " + process + ". "
+            : "") +
+      (mode === "automatic"
+        ? "New project work activates automatically."
+        : mode === "owner_open"
+          ? "Owner open required after stop or setup failure."
+          : mode === "explicit_target_closed"
+            ? "Explicit target remains closed."
+            : "");
   }
   let detail = stateDetail(state);
   if (data && typeof data === "object" && (data as any).truncated === true)

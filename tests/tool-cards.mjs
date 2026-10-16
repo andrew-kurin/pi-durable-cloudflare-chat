@@ -397,6 +397,77 @@ try {
     );
     await page.screenshot({ path: out + "/workspace-fresh-" + width + ".png" });
   }
+  for (const [phase, process, mode] of [
+    ["absent", "none", "automatic"],
+    ["closed", "none", "automatic"],
+    ["ready", "not_found", "ready"],
+  ]) {
+    const status = new ChatProjection();
+    status.entry({
+      id: "status",
+      kind: "pi.assistant",
+      model: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "status-call",
+              name: "workspace_status",
+              arguments: {},
+            },
+          ],
+        },
+      ],
+    });
+    status.entry({
+      id: "status-result",
+      kind: "pi.tool-result",
+      model: [
+        {
+          role: "toolResult",
+          toolCallId: "status-call",
+          toolName: "workspace_status",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                data: {
+                  phase,
+                  runs: {},
+                  process: { state: process },
+                  activation: { mode },
+                },
+              }),
+            },
+          ],
+        },
+      ],
+    });
+    await page.evaluate(
+      (v) => window.streams.at(-1).onmessage({ data: JSON.stringify(v) }),
+      { ...status.view(), historyProtocol: 2 },
+    );
+    const row = page.locator(".tool-row[data-state=success]");
+    assert.match(
+      await row.locator("summary").textContent(),
+      /Workspace status/,
+    );
+    assert.match(
+      await row.locator("summary").textContent(),
+      process === "not_found"
+        ? /Requested process not found/
+        : /No active process/,
+    );
+    if (mode === "automatic")
+      assert.match(
+        await row.locator("summary").textContent(),
+        /activates automatically/,
+      );
+    await page.screenshot({
+      path: out + "/workspace-status-" + phase + ".png",
+    });
+  }
   assert.equal(modelCalls, 0);
   assert.deepEqual(errors, []);
   await writeFile(

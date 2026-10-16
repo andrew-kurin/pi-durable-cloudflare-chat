@@ -197,6 +197,73 @@ export class WorkspaceCoordinator {
       : undefined;
     return { workspaceId, ...(predecessor ? { predecessor } : {}) };
   }
+  private async statusResult(
+    session: string,
+    input: WorkspaceToolRequest,
+    state?: State,
+  ) {
+    const phase = state?.phase ?? "absent";
+    const targetsCurrent =
+      !input.workspaceId ||
+      (await this.store.get<string>("workspace-session:" + session)) ===
+        state?.id;
+    const stopped =
+      (await this.stopped(session))?.blocked ||
+      (targetsCurrent &&
+        ["cancelled", "interrupted", "initialization-failed"].includes(
+          state?.stopReason ?? "",
+        ));
+    const mode = stopped
+      ? "owner_open"
+      : input.workspaceId && phase === "closed"
+        ? "explicit_target_closed"
+        : phase === "initializing" || phase === "stopping"
+          ? "wait"
+          : phase === "ready"
+            ? "ready"
+            : "automatic";
+    const nextStep =
+      mode === "automatic"
+        ? "Status is observational, not a workspace failure. Continue intended project work with workspace_read, workspace_edit or workspace_exec; omit workspaceId so that tool starts a fresh workspace automatically. Old edits are not restored; prior artifact references are retained and unverified. Do not replay a prior command."
+        : mode === "ready"
+          ? "Continue intended project work with workspace_read, workspace_edit or workspace_exec. Poll an existing runId rather than replaying a command."
+          : mode === "wait"
+            ? "Wait for workspace setup or cleanup, then check status. Do not restart or replay commands."
+            : mode === "explicit_target_closed"
+              ? "This explicitly targeted workspace is closed. Keep its historical processes/artifacts associated with it; do not silently retarget. For already authorized new project work, omit workspaceId on a new read/edit/exec call; that tool still enforces the current workspace cancellation/startup restrictions."
+              : "The workspace was explicitly stopped or setup was interrupted/failed. The owner must explicitly open a workspace before new work; do not undo cancellation or replay commands.";
+    const runs = Object.fromEntries(
+      Object.entries(state?.runs ?? {}).map(([id, run]) => [
+        id,
+        phase === "closed" &&
+        (run.state === "running" || run.state === "dispatching")
+          ? {
+              ...run,
+              state: "interrupted" as const,
+              reason:
+                "Workspace is closed; historical process was not restarted.",
+            }
+          : run,
+      ]),
+    );
+    const runId =
+      input.action === "status"
+        ? (input.runId ?? (phase === "closed" ? undefined : state?.active))
+        : undefined;
+    const run = runId && Object.hasOwn(runs, runId) ? runs[runId] : undefined;
+    const process = run
+      ? { ...run, runId: run.id }
+      : { state: runId ? "not_found" : "none", ...(runId ? { runId } : {}) };
+    return {
+      ...state,
+      phase,
+      runs,
+      active: phase === "closed" ? undefined : state?.active,
+      process,
+      canAutoReplace: mode === "automatic",
+      activation: { mode, nextStep },
+    };
+  }
   async execute(
     session: string,
     input: WorkspaceToolRequest,
@@ -208,6 +275,18 @@ export class WorkspaceCoordinator {
       const id =
         input.workspaceId ??
         (await this.store.get<string>("workspace-session:" + session));
+      if (input.action === "status") {
+        if (!/^[a-f0-9]{64}$/.test(input.operationId))
+          throw new RequestError(400, "Invalid operation ID");
+        await this.requireChat(session);
+        if (!id) return this.statusResult(session, input);
+        const stub = await this.owned(session, id);
+        return this.statusResult(
+          session,
+          input,
+          (await stub.request({ ...input, workspaceId: id })) as State,
+        );
+      }
       if (!id)
         throw Error("No workspace is associated with this conversation.");
       const stub = await this.owned(session, id);
@@ -245,8 +324,12 @@ export class WorkspaceCoordinator {
           const state = await this.state(id);
           if (state.phase === "initializing") startup = this.start(session, id);
           else if (state.phase === "closed" && !binding) {
+            if (input.workspaceId)
+              throw new RequestError(
+                409,
+                "Explicit workspace is closed; its identity was not retargeted. For new authorized project work, make a new read/edit/exec call and omit workspaceId for automatic activation. Old edits will not be restored; previous artifacts remain available.",
+              );
             if (
-              input.workspaceId ||
               state.stopReason === "cancelled" ||
               state.stopReason === "initialization-failed" ||
               state.stopReason === "interrupted"
@@ -333,7 +416,10 @@ export class WorkspaceCoordinator {
     return (await this.cancelStarted(session, id, false)) ?? state;
   }
   async status(session: string, id: string) {
-    return (await this.owned(session, id)).request(statusRequest(id));
+    const state = (await (
+      await this.owned(session, id)
+    ).request(statusRequest(id))) as State;
+    return this.statusResult(session, statusRequest(id), state);
   }
   async ownerAction(
     session: string,
