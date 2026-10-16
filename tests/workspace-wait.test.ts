@@ -44,7 +44,7 @@ test("saved npm-ci running/empty-log pattern becomes one bounded tool wait with 
   );
   assert.equal(result.outcome, "still_running");
   assert.equal(c.time, 20000);
-  assert.equal(polls, 11);
+  assert.equal(polls, 10);
   assert.match(result.nextStep, /not complete/);
   assert.match(result.nextStep, /workspace_wait again/);
   assert.equal(result.commandRemainingMs, 280000);
@@ -266,8 +266,65 @@ test("tool recovery reuses its memoized deadline and never gives a resumed wait 
     BACKGROUND_CONTEXT,
   );
   const data = JSON.parse((result.content![0] as any).text).data;
-  assert.equal(data.outcome, "still_running");
+  assert.equal(data.outcome, "unavailable");
+  assert.equal(data.status, undefined);
   assert.equal(data.waitedMs, 0);
   assert.equal(memos.get("wait-deadline"), 20000);
+  assert.equal(reads, 0);
+});
+
+// Real transport latency, unlike an immediately resolved promise, loses a race
+// against a zero-ms timer. Advance only the logical wait clock to keep this fast.
+test("asynchronous status RPCs exhaust the budget with the last verified running snapshot and no extra read", async () => {
+  const c = clock();
+  const startedAt: number[] = [];
+  const observed = snapshot();
+  const result = await waitForWorkspaceRun(
+    () => {
+      startedAt.push(c.time);
+      return new Promise((resolve) => setTimeout(() => resolve(observed), 2));
+    },
+    { ...input, waitMs: 10000 },
+    c,
+  );
+  assert.equal(result.outcome, "still_running");
+  assert.deepEqual(startedAt, [0, 2000, 4000, 6000, 8000]);
+  assert.equal(result.waitedMs, 10000);
+  assert.equal(result.observedAt, 8000);
+  assert.equal(result.status, observed);
+  assert.equal(result.commandRemainingMs, 290000);
+});
+test("a pending status RPC remains unavailable even after an earlier running observation", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+  let reads = 0;
+  let startPending!: () => void;
+  const pending = new Promise<void>((resolve) => (startPending = resolve));
+  const waiting = waitForWorkspaceRun(() => {
+    if (++reads === 1) return Promise.resolve(snapshot());
+    startPending();
+    return new Promise(() => {});
+  }, { ...input, waitMs: 10000 }, { sleep: async () => { t.mock.timers.tick(2000); } });
+  await pending;
+  t.mock.timers.tick(8000);
+  const result = await waiting;
+  assert.equal(result.outcome, "unavailable");
+  assert.equal(result.observedAt, 0);
+  assert.equal(result.status?.process?.state, "running");
+  assert.equal(reads, 2);
+});
+test("cancellation at budget expiration takes precedence over a running snapshot", async () => {
+  const abort = new AbortController();
+  let time = 0, reads = 0;
+  await assert.rejects(waitForWorkspaceRun(async () => {
+    reads++;
+    return snapshot();
+  }, { ...input, waitMs: 10000 }, {
+    signal: abort.signal,
+    now: () => time,
+    sleep: async () => {
+      time = 10000;
+      abort.abort(Error("owner cancelled at deadline"));
+    },
+  }), /owner cancelled at deadline/);
   assert.equal(reads, 1);
 });
