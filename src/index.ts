@@ -4,6 +4,7 @@ import { HistoryFeed } from "./history-feed";
 import { WorkspaceCoordinator } from "./workspace-coordinator";
 import { ChatCatalog } from "./chat-catalog";
 import { RequestError, jsonObject } from "./http-input";
+import { SubmissionAdmission } from "./submission-admission";
 import { logTechnicalError } from "./error-log";
 import { DurableObject } from "cloudflare:workers";
 import { PiHarness } from "agents/harness/pi";
@@ -454,54 +455,27 @@ export class Assistant extends DurableObject<Env> {
           !/^[-a-zA-Z0-9]{8,80}$/.test(b.operationId)
         )
           return Response.json({ error: "Invalid message" }, { status: 400 });
-        const key = `admission:${sid}:${b.operationId}`;
-        const digest = Array.from(
-          new Uint8Array(
-            await crypto.subtle.digest(
-              "SHA-256",
-              new TextEncoder().encode(b.text),
-            ),
-          ),
-        )
-          .map((x) => x.toString(16).padStart(2, "0"))
-          .join("");
-        const prior = await this.ctx.storage.get<{
-          digest: string;
-          receipt?: unknown;
-        }>(key);
-        if (prior && prior.digest !== digest)
-          return Response.json(
-            { error: "Operation ID already used" },
-            { status: 409 },
-          );
-        if (prior?.receipt) return Response.json(prior.receipt);
-        if (!prior) {
-          if ((await this.harness.sessions.list()).some((s) => s.busy))
-            return Response.json(
-              { error: "Wait for the current request to finish" },
-              { status: 409 },
-            );
-          const reserved = await this.ctx.storage.transaction(async (tx) => {
-            const today = new Date().toISOString().slice(0, 10);
-            const daily = await tx.get<{ day: string; count: number }>("quota");
-            const count = daily?.day === today ? daily.count : 0;
-            if (count >= 50) return false;
-            await tx.put("quota", { day: today, count: count + 1 });
-            await tx.put(key, { digest });
-            return true;
-          });
-          if (!reserved)
-            return Response.json(
-              { error: "Daily limit of 50 messages reached" },
-              { status: 429 },
-            );
-        }
-        const receipt = await this.harness.submit(b.text, {
-          session: sid,
+        let dispatched = false;
+        const admission = new SubmissionAdmission(
+          this.ctx.storage,
+          async () => (await this.harness.sessions.list()).some((s) => s.busy),
+          async ({ sessionId, operationId, text }) => {
+            const receipt = await this.harness.submit(text, {
+              session: sessionId,
+              operationId,
+            });
+            dispatched = true;
+            return receipt;
+          },
+        );
+        const receipt = await admission.submit({
+          sessionId: sid,
           operationId: b.operationId,
+          text: b.text,
         });
-        await this.ctx.storage.put(key, { digest, receipt });
-        await this.chatCatalog.autoTitle(sid, b.text);
+        // Preserve metadata ordering and the existing cached-receipt fast path.
+        // In particular, replay does not repair an earlier failed auto-title write.
+        if (dispatched) await this.chatCatalog.autoTitle(sid, b.text);
         return Response.json(receipt);
       }
       if (path === "/api/abort" && request.method === "POST")
