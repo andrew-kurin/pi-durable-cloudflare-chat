@@ -52,3 +52,29 @@ test('dispatch failure consumes one conservative reservation and retries remain 
  await assert.rejects(admission.submit(input),/Dispatch failed/);assert.equal(s.data.get('quota').count,1);
  await assert.rejects(admission.submit({...input,text:'changed'}),{status:409});fail=false;await admission.submit(input);assert.equal(s.data.get('quota').count,1);
 });
+
+test('durable cancellation survives admission reconstruction, preserves completed receipts, and isolates sessions',async()=>{
+ const s=store();let calls=0,aborts=0;
+ const make=()=>new SubmissionAdmission(s as any,async()=>false,async()=>({accepted:!!++calls}),async()=>{aborts++;});
+ const receipt=await make().submit(input);
+ await s.put('submission-cancel:1','stop-1');
+ assert.deepEqual(await make().submit(input,'stop-1'),receipt);
+ const queued={...input,operationId:'queued-before-stop'};
+ await assert.rejects(make().submit(queued),{status:409});
+ assert.equal(s.data.get('quota').count,1);
+ await assert.rejects(make().submit(queued,'stop-1'),{status:409});
+ await s.put('submission-cancel:1','stop-2');
+ await assert.rejects(make().submit(queued,'stop-2'),{status:409});
+ await make().submit({...input,operationId:'new-after-stop'},'stop-2');
+ await make().submit({...input,sessionId:'2'});
+ assert.equal(calls,3);assert.equal(aborts,0);assert.equal(s.data.get('quota').count,3);
+});
+
+test('Stop racing a failed dispatch still performs late acceptance cleanup; cancelled replay never aborts newer work',async()=>{
+ const s=store();let aborts=0;
+ const first=new SubmissionAdmission(s as any,async()=>false,async()=>{await s.put('submission-cancel:1','stop');throw Error('Lost accepted SDK response');},async()=>{aborts++;});
+ await assert.rejects(first.submit(input),{status:409});assert.equal(aborts,1);
+ assert.equal(s.data.get('quota').count,1);
+ const recovered=new SubmissionAdmission(s as any,async()=>false,async()=>{throw Error('Cancelled operation must not dispatch');},async()=>{aborts++;});
+ await assert.rejects(recovered.submit(input,'stop'),{status:409});assert.equal(aborts,1);
+});

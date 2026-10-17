@@ -32,7 +32,7 @@ export function technicalError(error:unknown){
  const code=typeof reported==='string'&&/^[a-z][a-z0-9_.-]{0,63}$/.test(reported)?redactErrorText(reported,64):undefined;
  return {message:redactErrorText(raw),...(status?{status}:{}),...(code?{code}:{}),...(typeof e?.stack==='string'?{stack:redactErrorText(e.stack,2400)}:{})};
 }
-export function logTechnicalError(stage:'model_dispatch'|'request'|'saved_model_response',error:unknown,correlation:string,extra:Record<string,string|number|boolean>={},emit:(record:unknown)=>void=record=>console.warn(JSON.stringify(record))){
+export function logTechnicalError(stage:'model_dispatch'|'request'|'saved_model_response'|'auto_title',error:unknown,correlation:string,extra:Record<string,string|number|boolean>={},emit:(record:unknown)=>void=record=>console.warn(JSON.stringify(record))){
  try{const source=stage==='request'&&(error instanceof SyntaxError||(error as any)?.name==='SyntaxError')?new Error('Request parsing failed; raw input omitted.'):error;emit({event:'pi_error',stage,correlation,...technicalError(source),...extra});return true;}catch{/* Diagnostics must not change chat or stream behavior. */return false;}
 }
 interface ErrorLogTx{get<T>(key:string):Promise<T|undefined>;put<T>(key:string,value:T):Promise<void>}
