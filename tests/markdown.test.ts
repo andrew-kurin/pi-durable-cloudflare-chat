@@ -1,3 +1,4 @@
+import {createHistoryClient} from '../public/history-client.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -29,7 +30,7 @@ test('SSE partials, completed history, session switches and reload use the same 
  const saved = [{ role: 'user', text: '**Saved question**' }, { role: 'assistant', text: '[Saved answer](https://example.test)' }];
  for (let reload = 0; reload < 2; reload++) {
   const dom = new JSDOM(html, { url: 'https://chat.example.test', runScripts: 'outside-only' }); const w = dom.window as any; const streams: any[] = [];
-  w.renderMarkdown = renderMarkdown; w.toolActivity = toolActivity; w.fetch = async (path: string) => ({ ok: true, json: async () => path.includes('/api/sessions') ? [{ id: '1' }, { id: '2' }] : { connected: true, modelEnabled: true, canLogin: false, webSearchEnabled: true } });
+  w.createHistoryClient=(options:any)=>createHistoryClient({...options,platform:w});w.renderMarkdown= renderMarkdown; w.toolActivity = toolActivity; w.fetch = async (path: string) => ({ ok: true, json: async () => path.includes('/api/sessions') ? [{ id: '1' }, { id: '2' }] : { connected: true, modelEnabled: true, canLogin: false, webSearchEnabled: true } });
   w.EventSource = class { onmessage: any; close() {} constructor() { streams.push(this); } }; w.eval(script); await new Promise(resolve => setTimeout(resolve, 0));
   streams[0].onmessage({ data: JSON.stringify({ messages: saved, partial: '```\n<script>alert(1)', busy: true }) });
   assert.equal(w.document.querySelector('.partial pre code').textContent, '<script>alert(1)'); assert.equal(w.document.querySelectorAll('.message a').length, 1); assert.equal(w.document.querySelector('#messages script'), null);
