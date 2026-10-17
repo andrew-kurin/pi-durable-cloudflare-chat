@@ -53,3 +53,13 @@ test('delete completion reconciles membership without overriding a later valid s
 test('create and restore select their new chat only when navigation has not changed',async()=>{
  const f=fixture();await f.session.refresh();await f.session.create();assert.equal(f.session.state().sessionId,'3');const removed=await f.session.trash('3');assert.equal(removed!.wasActive,true);await f.session.restore('3',true);assert.equal(f.session.state().sessionId,'3');
 });
+
+test('only typed terminal cancellation releases a pending identity; drafts and other sessions survive',async()=>{
+ for(const error of [Object.assign(Error('cancelled'),{status:409,code:'submission_cancelled'}),Object.assign(Error('conflict'),{status:409}),Object.assign(Error('ambiguous'),{status:500,code:'submission_cancelled'}),null,undefined]){
+  const f=fixture();await f.session.refresh();const waiting=deferred();f.setTransport(()=>waiting.promise);f.session.editDraft('same work');const work=f.session.submit();
+  f.session.select('1');f.session.editDraft('other draft');waiting.reject(error);await assert.rejects(work);assert.equal(f.session.state().draft,'other draft');
+  f.session.select('2');assert.equal(f.session.state().draft,'same work');f.setTransport(async()=>{throw Error('unrelated transport failure')});await assert.rejects(f.session.submit());
+  const ids=f.calls.filter(x=>x.path.includes('/submit')).map(x=>x.body.operationId);
+  assert.equal(ids[0]===ids[1],!(error?.status===409&&error?.code==='submission_cancelled'));
+ }
+});

@@ -516,7 +516,7 @@ export class Assistant extends DurableObject<Env> {
     } catch (error) {
       if (error instanceof RequestError)
         return Response.json(
-          { error: error.message },
+          { error: error.message, ...(error.code ? { code: error.code } : {}) },
           { status: error.status },
         );
       logTechnicalError("request", error, crypto.randomUUID());

@@ -5,7 +5,7 @@ export interface SubmissionInput {
   text: string;
 }
 export const submissionCancelKey = (sessionId: string) => `submission-cancel:${sessionId}`;
-const cancelled = () => new RequestError(409, "Submission cancelled. Start a new message to continue.");
+const cancelled = () => new RequestError(409, "Submission cancelled. Send again to start a new message.", "submission_cancelled");
 type Store = Pick<DurableObjectStorage, "get" | "put" | "transaction">;
 /** Owns the exact-text binding, attempt quota and receipt journal.
  * Inputs are validated by the HTTP edge. Callers retain the Assistant POST queue:
