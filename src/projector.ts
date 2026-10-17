@@ -386,6 +386,7 @@ export class ChatProjection {
       });
     return {
       projectionVersion: 2,
+      failureState: this.failed ? { kind: "model" as const, recoveryAction: "check-status" as const } : null,
       messages,
       partial: Object.values(this.partial).join(""),
       partialTools,
