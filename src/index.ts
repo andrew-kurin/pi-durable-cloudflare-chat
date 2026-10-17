@@ -4,7 +4,7 @@ import { HistoryFeed } from "./history-feed";
 import { WorkspaceCoordinator } from "./workspace-coordinator";
 import { ChatCatalog } from "./chat-catalog";
 import { RequestError, jsonObject } from "./http-input";
-import { SubmissionAdmission } from "./submission-admission";
+import { SubmissionAdmission, submissionCancelKey } from "./submission-admission";
 import { logTechnicalError } from "./error-log";
 import { DurableObject } from "cloudflare:workers";
 import { PiHarness } from "agents/harness/pi";
@@ -85,6 +85,10 @@ export class Assistant extends DurableObject<Env> {
     );
   }
   private admission: Promise<unknown> = Promise.resolve();
+  private stops = new Map<string, Promise<unknown>>();
+  private async waitForStop(sid: string) {
+    while (this.stops.has(sid)) await this.stops.get(sid);
+  }
   harness = new PiHarness({
     harness: ({ storage, context }) => {
       const registry = createRegistry();
@@ -134,10 +138,10 @@ export class Assistant extends DurableObject<Env> {
     } catch {
       return new Response("Forbidden", { status: 403 });
     }
-    // Cancellation/extension must reach the workspace even while setup is awaiting I/O.
+    // Control requests must reach running work even while a mutation awaits I/O.
     if (
       request.method === "POST" &&
-      new URL(request.url).pathname === "/api/events/close"
+      ["/api/events/close", "/api/abort"].includes(new URL(request.url).pathname)
     )
       return this.handle(request);
     if (
@@ -148,7 +152,15 @@ export class Assistant extends DurableObject<Env> {
     )
       return this.handle(request);
     if (request.method === "POST") {
-      const work = this.admission.then(() => this.handle(request));
+      // Capture arrival generation before joining the queue, so Stop also cancels
+      // submissions waiting behind an unrelated mutation.
+      const url = new URL(request.url);
+      const sid = url.searchParams.get("session") ?? "1";
+      const epoch = url.pathname === "/api/submit" && /^\d{1,12}$/.test(sid)
+        ? this.ctx.storage.get<string>(submissionCancelKey(sid)) : undefined;
+      // The queued handler reports read failures through the normal error boundary.
+      void epoch?.catch(() => {});
+      const work = this.admission.then(() => this.handle(request, epoch));
       this.admission = work.then(
         () => undefined,
         () => undefined,
@@ -157,7 +169,7 @@ export class Assistant extends DurableObject<Env> {
     }
     return this.handle(request);
   }
-  private async handle(request: Request): Promise<Response> {
+  private async handle(request: Request, submissionEpoch?: Promise<string | undefined>): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
     const sid = url.searchParams.get("session") ?? "1";
@@ -455,7 +467,6 @@ export class Assistant extends DurableObject<Env> {
           !/^[-a-zA-Z0-9]{8,80}$/.test(b.operationId)
         )
           return Response.json({ error: "Invalid message" }, { status: 400 });
-        let dispatched = false;
         const admission = new SubmissionAdmission(
           this.ctx.storage,
           async () => (await this.harness.sessions.list()).some((s) => s.busy),
@@ -464,24 +475,33 @@ export class Assistant extends DurableObject<Env> {
               session: sessionId,
               operationId,
             });
-            dispatched = true;
             return receipt;
           },
+          ({ sessionId, operationId }) => this.harness.abort({ session: sessionId, operationId }),
+          ({ sessionId }) => this.waitForStop(sessionId),
         );
         const receipt = await admission.submit({
           sessionId: sid,
           operationId: b.operationId,
           text: b.text,
-        });
-        // Preserve metadata ordering and the existing cached-receipt fast path.
-        // In particular, replay does not repair an earlier failed auto-title write.
-        if (dispatched) await this.chatCatalog.autoTitle(sid, b.text);
+        }, await submissionEpoch);
+        // Metadata failure must not turn an accepted message into a failed submit.
+        // Replays retry missing metadata without dispatching the message again.
+        try { await this.chatCatalog.autoTitle(sid, b.text); }
+        catch (error) { logTechnicalError("auto_title", error, crypto.randomUUID()); }
         return Response.json(receipt);
       }
-      if (path === "/api/abort" && request.method === "POST")
-        return Response.json({
-          aborted: await this.harness.abort({ session: sid }),
-        });
+      if (path === "/api/abort" && request.method === "POST") {
+        const prior = this.stops.get(sid);
+        const stop = (async () => {
+          await this.ctx.storage.put(submissionCancelKey(sid), crypto.randomUUID());
+          // Multiple Stops retain their own epochs but cannot overtake each other.
+          await prior?.catch(() => {});
+          return this.harness.abort({ session: sid });
+        })().finally(() => { if (this.stops.get(sid) === stop) this.stops.delete(sid); });
+        this.stops.set(sid, stop);
+        return Response.json({ aborted: await stop });
+      }
       if (path === "/api/events/close" && request.method === "POST") {
         const id = url.searchParams.get("stream");
         if (!id || !/^[a-f0-9-]{36}$/.test(id))
