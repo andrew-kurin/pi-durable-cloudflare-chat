@@ -189,13 +189,13 @@ export class Assistant extends DurableObject<Env> {
         await this.chatCatalog.requireActive(sid);
       if (path === "/api/openai-check/status" && request.method === "GET")
         return Response.json(await this.providers.openaiCheckStatus());
-      if (path === "/api/openai-check/run" && request.method === "POST") {
+      if (["/api/openai-check/run", "/api/openai-check/recheck"].includes(path) && request.method === "POST") {
         const raw = await request.text();
         if (raw.length > 100) throw new RequestError(400, "Approve the fixed check");
         const body = jsonObject(raw);
         if (Object.keys(body).length !== 1 || body.approved !== true) throw new RequestError(400, "Approve the fixed check");
         if ((await this.harness.sessions.list()).some(s => s.busy)) throw new RequestError(409, "Wait for the current chat request to finish");
-        return Response.json(await this.providers.runApprovedOpenAICheck(request.signal));
+        return Response.json(await this.providers.runApprovedOpenAICheck(request.signal, path === "/api/openai-check/recheck"));
       }
       if (path.startsWith("/api/grok/")) {
         if (this.env.ENABLE_GROK_SUBSCRIPTION !== "true")
