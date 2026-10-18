@@ -7,7 +7,7 @@ export interface CatalogEvidence {
  error?: string; providerError?: { code?: string; type?: string; message?: string };
  bodyExcerpt?: string; bodyTruncated?: boolean; bytesRead?: number;
  schema?: { topKeys: string[]; modelsType: string; dataType: string; modelsLength?: number; dataLength?: number; entryKeys?: string[] };
- catalog: { slug: string; display_name: string; visibility?: string }[]; observedDataIds?: string[];
+ catalog: { slug: string; display_name: string; visibility?: string; supported_in_api?: boolean }[]; observedDataIds?: string[];
 }
 /** Exactly one GET, no credential mutation, inference, retries or journal access. */
 export async function readSiwcCatalog(credential: LocalSiwcCredential, transport: typeof fetch, timeoutMs = 30000): Promise<CatalogEvidence> {
@@ -40,7 +40,7 @@ export async function readSiwcCatalog(credential: LocalSiwcCredential, transport
   if(truncated){r.stage='body';r.error ??='Catalog receive limit or interrupted body';return r;}
   r.stage='schema';
   if(!Array.isArray(data?.models)||data.models.length>1000){r.error='Expected documented models array';return r;}
-  for(const m of data.models){if(!m||typeof m.slug!=='string'||!/^[\w.-]{1,128}$/.test(m.slug)||typeof m.display_name!=='string'||m.display_name.length>200||/[\x00-\x1f]/.test(m.display_name)){r.error='Invalid documented catalog entry';r.catalog=[];return r;}r.catalog.push({slug:clean(m.slug,128),display_name:clean(m.display_name,200),...(m.visibility==='list'?{visibility:'list'}:{})});}
+  for(const m of data.models){if(!m||typeof m.slug!=='string'||!/^[\w.-]{1,128}$/.test(m.slug)||typeof m.display_name!=='string'||m.display_name.length>200||/[\x00-\x1f]/.test(m.display_name)){r.error='Invalid documented catalog entry';r.catalog=[];return r;}r.catalog.push({slug:clean(m.slug,128),display_name:clean(m.display_name,200),...(m.visibility==='list'?{visibility:'list'}:{}),...(typeof m.supported_in_api==='boolean'?{supported_in_api:m.supported_in_api}:{})});}
   r.stage='complete';r.outcome='available';return r;
  } catch(error) { r.error=clean(error instanceof Error?error.message:error);const cause=(error as {cause?:{code?:unknown}})?.cause?.code;if(cause)r.error+='; cause code: '+clean(cause,100);return r; }
  finally { clearTimeout(timer);controller.signal.removeEventListener('abort',abort);reader?.releaseLock(); }

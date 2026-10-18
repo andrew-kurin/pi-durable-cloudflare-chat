@@ -1,3 +1,4 @@
+import { redactDiagnosticCredentials } from '../../src/diagnostic-credentials';
 import { readSiwcCatalog, type CatalogEvidence } from './siwc-catalog';
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 import { Type, type Message } from '@earendil-works/pi-ai';
@@ -6,13 +7,18 @@ import { streamSimple } from '@earendil-works/pi-ai/api/openai-responses';
 import type { LocalSiwcCredential } from './siwc-auth';
 import type { RoundJournal } from './core';
 const TARGETS = ['gpt-6.1-sol', 'gpt-6-luna'] as const;
-export interface SiwcReport { catalogEvidence?: CatalogEvidence; catalog: { slug: string; display_name: string; visibility?: string }[]; checks: { model: string; status: string; requests: number; toolCalls: number; http: number[]; terminal: string[] }[] }
+export interface SiwcReport { catalogEvidence?: CatalogEvidence; catalog: { slug: string; display_name: string; visibility?: string }[]; checks: { model: string; status: string; requests: number; toolCalls: number; http: number[]; terminal: string[]; error?: string; sdkError?: string; evidence?: {status:number;contentType?:string;requestId?:string;cfRay?:string;bodyExcerpt?:string;bodyPresent?:boolean}[] }[] }
 /** A fixed one-shot LOCAL diagnostic, independent of pi-chat and its credentials.
  * Explicit transport/credential injection; no ambient fetch, OAuth or billing fallback. */
 export async function runLocalSiwcCheck(credential: LocalSiwcCredential, transport: typeof fetch, journal: RoundJournal, approved: boolean): Promise<SiwcReport> {
  if (!approved) throw Error('Explicit local diagnostic approval required');
  if (!credential.scopes.includes('chatgpt.tokens.use.direct') || credential.expires <= Date.now() || !credential.access || credential.access.startsWith('sk-')) throw Error('Valid SIWC consent required; no refresh or API-key fallback');
  if (await journal.reserve('local-siwc-check-v1', '0'.repeat(64)) !== 'new') throw Error('Diagnostic already reserved; do not replay');
+ return runLocalSiwcRounds(credential, transport, await readSiwcCatalog(credential, transport));
+}
+export async function runLocalSiwcRounds(credential: LocalSiwcCredential, transport: typeof fetch, catalogEvidence: CatalogEvidence, beforeRequest?: (model: string, round: number) => Promise<void>, progress?: (report: SiwcReport) => Promise<void>): Promise<SiwcReport> {
+ if (credential.expires <= Date.now() || !credential.scopes.includes('chatgpt.tokens.use.direct') || credential.access.startsWith('sk-')) throw Error('Valid SIWC session required; no refresh');
+ const clean=(value:string)=>redactDiagnosticCredentials(value,[credential.access,credential.refresh,credential.idToken]).slice(0,4096);
  const report: SiwcReport = { catalog: [], checks: [] };
  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 240000);
  async function bounded(response: Response, max: number) {
@@ -20,7 +26,7 @@ export async function runLocalSiwcCheck(credential: LocalSiwcCredential, transpo
   return new Response(new ReadableStream<Uint8Array>({ async pull(output) { try { const p = await reader.read(); if (p.done) output.close(); else { size += p.value.length; if (size > max) { controller.abort(); await reader.cancel(); throw Error('Receive limit'); } output.enqueue(p.value); } } catch { output.error(Error('Bounded stream interrupted')); } }, cancel: () => reader.cancel() }), { status: response.status, headers: response.headers });
  }
  try {
-  const catalogEvidence = await readSiwcCatalog(credential, transport); report.catalogEvidence = catalogEvidence; report.catalog = catalogEvidence.catalog;
+  report.catalogEvidence = catalogEvidence; report.catalog = catalogEvidence.catalog;
   if (catalogEvidence.outcome !== 'available') return report;
   for (const id of TARGETS) {
    const check: SiwcReport['checks'][number] = { model: id, status: 'unavailable', requests: 0, toolCalls: 0, http: [], terminal: [] }; report.checks.push(check);
@@ -34,9 +40,12 @@ export async function runLocalSiwcCheck(credential: LocalSiwcCredential, transpo
     const stream = streamSimple(model, normalizeContext({ messages, ...(id === TARGETS[0] ? { tools: [{ name: 'test_status', description: 'Fixed marker; no environment access.', parameters: Type.Object({}, { additionalProperties: false }) }] } : {}) }), { apiKey: credential.access, reasoning: 'low', maxRetries: 0, timeoutMs: 60000, signal: abort.signal,
      fetch: async (input, init) => {
       if (String(input) !== 'https://api.openai.com/v1/responses' || init?.method !== 'POST' || check.requests >= (id === TARGETS[0] ? 2 : 1)) throw Error('Outside fixed diagnostic');
-      check.requests++; const response = await transport(input, { ...init, redirect: 'error', signal: abort.signal }); check.http.push(response.status);
-      if (!response.ok) { await response.body?.cancel(); return Response.json({ error: { code: 'siwc_http_rejected', message: 'SIWC request rejected' } }, { status: response.status }); }
-      if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) { await response.body?.cancel(); throw Error('Expected SSE'); }
+      await beforeRequest?.(id, round); check.requests++; await progress?.(report); const response = await transport(input, { ...init, redirect: 'error', signal: abort.signal }); check.http.push(response.status);
+      const evidence: NonNullable<SiwcReport['checks'][number]['evidence']>[number]={status:response.status,bodyPresent:!!response.body};
+      for(const [header,key] of [['content-type','contentType'],['x-request-id','requestId'],['cf-ray','cfRay']] as const){const v=response.headers.get(header);if(v!==null)evidence[key]=clean(v);}
+      (check.evidence??=[]).push(evidence);
+      if (!response.ok) { const body=response.body?await (await bounded(response,65536)).text():''; evidence.bodyExcerpt=clean(body); await progress?.(report); return new Response(body,{status:response.status,headers:response.headers}); }
+      if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) { check.error='Expected SSE; content-type: '+(evidence.contentType??'absent')+'; body present: '+!!response.body; if(response.body)evidence.bodyExcerpt=clean(await (await bounded(response,65536)).text()); await progress?.(report); throw Error(check.error); }
       return bounded(response, 65536);
      },
      onPayload: raw => {
@@ -47,7 +56,7 @@ export async function runLocalSiwcCheck(credential: LocalSiwcCredential, transpo
      onProviderStreamEvent: event => { const type = (event as { type?: string }).type; if (type === 'response.completed') completed = true; if (['response.completed','response.failed','response.incomplete'].includes(type ?? '')) check.terminal.push(type!); },
     });
     for await (const _event of stream) { /* Generated text/reasoning never logged. */ }
-    const result = await stream.result(); if (!completed || !['stop','toolUse'].includes(result.stopReason)) throw Error('Incomplete or failed inference'); return result;
+    const result = await stream.result(); if(result.errorMessage)check.sdkError=clean(result.errorMessage); await progress?.(report); if (!completed || !['stop','toolUse'].includes(result.stopReason)) throw Error('Incomplete or failed inference'); return result;
    };
    try {
     const first = await request();
@@ -58,8 +67,8 @@ export async function runLocalSiwcCheck(credential: LocalSiwcCredential, transpo
      const last = await request(); if (last.stopReason !== 'stop' || !last.content.some(c => c.type === 'text' && c.text.includes('offline-marker'))) throw Error('Marker not confirmed');
     } else if (first.stopReason !== 'stop' || !first.content.some(c => c.type === 'text' && c.text.trim())) throw Error('No Luna text');
     check.status = 'passed';
-   } catch { check.status = 'failed'; }
-   finally { clearTimeout(deadline); controller.signal.removeEventListener('abort', abortOuter); }
+   } catch (error) { check.status = 'failed'; check.error??=clean(error instanceof Error?error.message:String(error)); }
+   finally { clearTimeout(deadline); controller.signal.removeEventListener('abort', abortOuter); await progress?.(report); }
   }
   return report;
  } finally { clearTimeout(timer); controller.abort(); }
