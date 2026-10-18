@@ -50,4 +50,4 @@ This emits a fake `test_status` call. No tool runs on the service. Repeating tha
 
 Offline tests prove the boundary and fail-closed behavior with fake credentials/inference, not live eligibility, OAuth security, network availability, upstream cancellation confirmation or production recovery.
 
-A separate [local SIWC compatibility check](LOCAL-SIWC.md) is prepared behind explicit action-time OAuth and diagnostic approval. Its default command only prints a plan. No live sign-in, real model catalog or inference has been run; this does not change the fake runner or production routing.
+A separate [local SIWC compatibility check](LOCAL-SIWC.md) has passed explicitly approved Mac tests for Sol text, a Sol fixed-tool continuation and Luna text. See the curated [results](LIVE-RESULTS.md). Its default command remains inert. This diagnostic does not turn the fake service into a live runner. The [Spark preparation runbook](deploy/spark/README.md) describes the uninstalled service template and remaining gates.

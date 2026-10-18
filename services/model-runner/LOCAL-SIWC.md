@@ -1,8 +1,8 @@
-# Local SIWC compatibility check — approval pending
+# Local SIWC compatibility check
 
 This is a separate personal/local OSS test on the Mac. It is not a remote runner deployment or a statement that the Cloudflare hybrid is eligible. The existing fake runner and production pi-chat defaults remain unchanged. Do not run privileged actions until the owner has given action-time approval.
 
-## Concrete approval request
+## Approval required for future sign-in and model checks
 
 Approve registering **pi-durable-cloudflare-chat** as a local OSS client through OpenAI’s `dynamic_agent_client` flow on this Mac, selecting the intended ChatGPT account/workspace, and granting exactly:
 
@@ -14,7 +14,7 @@ Returning sign-in reuses the issued client ID, verifies the original subject, an
 
 The owner must separately approve the one-shot diagnostic, which performs one account-specific model-catalog GET and, only if actually listed, **at most two `gpt-6.1-sol` requests for one fixed `test_status` tool round-trip and one `gpt-6-luna` text request**. Tool execution only returns an in-memory marker. No files, shell, web tools, private context, API-key fallback, paid-credit opt-in, automatic refresh or retries. Receiving `response.completed` is required; interrupted/incomplete/failed streams fail. Global deadline 240s, per-model deadline 120s, 64 KiB received per inference response, 2 MiB catalog limit. No provider-side token ceiling is claimed: SIWC currently rejects `max_output_tokens`.
 
-## Commands (prepared, not authorized/executed live)
+## Commands (each privileged action requires explicit approval)
 
 ```sh
 # Safe: displays the plan, creates no state and does no networking.
@@ -27,11 +27,11 @@ node --import tsx services/model-runner/local-siwc.ts --sign-in --approved-local
 node --import tsx services/model-runner/local-siwc.ts --check --approved-local-check
 ```
 
-Sign-in starts a loopback listener, then prints a browser authorization URL containing no tokens. Open it in the Mac browser. Refusing consent stops the attempt. The default command is inert; neither privileged action runs implicitly. The diagnostic reads only this new protected local record, not Codex, pi-chat, keychain or environment credentials. It does not refresh; expiration requires a separately approved sign-in action. The one-shot dispatch fence `.runtime/local-siwc/diagnostic-rounds.jsonl` prevents replay after success, failure or disconnect. Do not delete it to retry uncertain work. Reports contain exact catalog slug/display names and bounded status metadata; generated text, reasoning and tokens are never logged.
+Sign-in starts a loopback listener, then prints a browser authorization URL containing no tokens. Open it in the Mac browser. Refusing consent stops the attempt. The default command is inert; neither privileged action runs implicitly. The diagnostic reads only this new protected local record, not Codex, pi-chat, keychain or environment credentials. It does not refresh; expiration requires a separately approved sign-in action. The one-shot dispatch fence `.runtime/local-siwc/diagnostic-rounds.jsonl` prevents replay after success, failure or disconnect. Do not delete it to retry uncertain work. Reports contain exact catalog slug/display names and bounded status metadata; generated text is omitted by default; the internal fixed diagnostic can explicitly capture bounded credential-redacted final text and tool-marker evidence. Hidden reasoning and tokens are never logged.
 
 `siwc-check.ts` reuses Pi 1.1.0’s native Responses serializer/parser. Its fixed `onPayload` constructs a documented minimal body, uses `additional_tools` input items for the fixed function, sends full history rather than `previous_response_id`, and omits unsupported options. `siwc-auth.ts` replaces the pinned OAuth helper for this test because the latter only checks ID-token presence and does not verify its signature/claims; the pinned helper also always re-registers a client. No dependencies were upgraded or patched for this local test.
 
-Offline tests cover callback abuse/replay, new/returning client IDs, ID-token signatures/issuer/audience/expiry/nonce/identity, granted scopes, discovered vs missing models, wire fields/tool continuation, HTTP failure/no-retry and approval/key/expiry fail-closed behavior. They establish no live entitlement or compatibility. **No actual model catalog has been discovered yet.**
+Offline tests cover callback abuse/replay, new/returning client IDs, ID-token signatures/issuer/audience/expiry/nonce/identity, granted scopes, discovered vs missing models, wire fields/tool continuation, HTTP failure/no-retry and approval/key/expiry fail-closed behavior. They establish no live entitlement or compatibility. The approved local results below establish availability only for that account and test time.
 
 Official guidance read October 18, 2026:
 - [OSS/local scope](https://developers.openai.com/siwc/token-sharing-open-source)
@@ -39,18 +39,22 @@ Official guidance read October 18, 2026:
 - [Models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
 - [Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
 
-Production wiring, remote authentication, VM credential transfer and hosted eligibility are outside this local action. No interest form is submitted. The new code remains local until separately approved for publication.
+Production wiring, remote authentication, VM credential transfer and hosted eligibility are outside this local action. No interest form is submitted. Source publication is separately authorized; protected runtime records are never included.
 
 ## Catalog-only operational diagnosis
 
 `--catalog --approved-catalog-read` makes exactly one GET with the existing valid local SIWC access token and writes `catalog-evidence.json` (0600). It does not open or alter the inference journal, refresh credentials, change scopes or invoke inference. Evidence retains stage, exact HTTP/content type, request ID/Ray, credential-redacted structured errors, bounded useful body head/tail and schema details. On truncation, “tail” is the end of the received prefix, not the complete upstream body. If a non-documented `data` schema is returned, its observed IDs are labeled separately instead of treating it as a validated SIWC catalog.
 
-The directed October 18 catalog read returned HTTP 200 `application/json`, but the original 256 KiB receive cap truncated the large catalog (which includes model instruction metadata) before JSON parsing completed. The saved prefix lists `gpt-6.1-sol` / `GPT-6.1-Sol`, visibility `list`, `supported_in_api:true`; full model enumeration and Luna availability were not established. The inference fence and credentials were unchanged. The catalog cap is now 2 MiB for a future explicitly directed read; no second request was made to test that change. A cap/interruption is now reported at the body stage rather than as invalid upstream JSON.
+The directed October 18 catalog read returned HTTP 200 `application/json`, but the original 256 KiB receive cap truncated the large catalog (which includes model instruction metadata) before JSON parsing completed. The saved prefix lists `gpt-6.1-sol` / `GPT-6.1-Sol`, visibility `list`, `supported_in_api:true`; full model enumeration and Luna availability were not established. The inference fence and credentials were unchanged. The catalog cap was raised to 2 MiB; the subsequent approved full read is recorded below. A cap/interruption is now reported at the body stage rather than as invalid upstream JSON.
 
 ## Audited continuation result — October 18
 
 The explicitly directed full catalog read completed: 569,147 received bytes, nine entries, both `gpt-6.1-sol` and `gpt-6-luna` with `visibility:list` and `supported_in_api:true`. The excerpt is truncated for storage, but JSON parsing and model enumeration completed.
 
-An exclusive recovery marker preserved the original reservation and recorded the established catalog-before-inference failure and zero prior inference. It journals cumulative per-model reservations before POST and never resets an uncertain round. One Sol request and one Luna request were sent; each returned HTTP 200 without a Content-Type header, no terminal SSE event, and the SDK error “Connection error.” No tool or Sol follow-up ran; neither model passed compatibility. No retry, refresh or fallback occurred. Credentials and original reservation remain unchanged. The recovery audit/progress/final report are private ignored files; no live evidence or tokens are committed.
+An exclusive recovery marker preserved the original reservation and recorded the established catalog-before-inference failure and zero prior inference. It journals cumulative per-model reservations before POST and never resets an uncertain round. One Sol request and one Luna request were sent; each returned HTTP 200 without a Content-Type header, no terminal SSE event, and the SDK error “Connection error.” No tool or Sol follow-up ran; neither model passed compatibility. No retry, refresh or fallback occurred. Credentials and original reservation remain unchanged. The recovery audit/progress/final report are private ignored files; only the curated nonsecret summary in LIVE-RESULTS.md is committed.
 
-The header absence triggers the local expected-SSE guard; it does not establish an upstream model-permission or subscription failure. Future unexpected-format responses now preserve the guard reason, body presence and bounded credential-redacted body, rather than relying only on the SDK’s generic connection message. No extra live request was made to exercise that improvement.
+The header absence triggers the local expected-SSE guard; it does not establish an upstream model-permission or subscription failure. Future unexpected-format responses now preserve the guard reason, body presence and bounded credential-redacted body, rather than relying only on the SDK’s generic connection message. Subsequent separately approved checks passed through the corrected parser; see [verified local results](LIVE-RESULTS.md). The cancelled earlier bodies remain unknown.
+
+## Corrected path: verified local success
+
+The separately approved fresh Sol text check and fresh Sol tool/Luna check passed on October 18. They used new bounded audits, preserving previous consumed reservations, with no retries, refresh or fallback. See [LIVE-RESULTS.md](LIVE-RESULTS.md) for the curated result and [SSE-PATH.md](SSE-PATH.md) for the defect trace. This is local SIWC compatibility evidence, not a running remote service or production recovery.

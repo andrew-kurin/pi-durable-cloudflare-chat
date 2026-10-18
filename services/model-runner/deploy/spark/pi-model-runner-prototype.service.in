@@ -1,0 +1,19 @@
+# PREPARATION ONLY: replace both placeholders before installation.
+# Fake inference only; contains no credential loading or live inference switch.
+[Unit]
+Description=Pi fake model runner (loopback prototype)
+
+[Service]
+Type=simple
+WorkingDirectory=@ABSOLUTE_PINNED_CHECKOUT@
+ExecStart=@ABSOLUTE_NODE@ --import tsx services/model-runner/server.ts
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=default.target
