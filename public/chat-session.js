@@ -63,7 +63,11 @@ export function createChatSession({ api, onChange, platform = window, requestedI
           drafts.set(session, { value: '', revision: submitted.revision + 1 });
         if (pending.get(session) === operation) pending.delete(session);
         resolve(receipt);
-      } catch (error) { reject(error); }
+      } catch (error) {
+        if (error?.status === 409 && error?.code === 'submission_cancelled' && pending.get(session) === operation)
+          pending.delete(session);
+        reject(error);
+      }
       finally { sending = undefined; sendingSession = undefined; emit('submission'); }
     })();
     return work;

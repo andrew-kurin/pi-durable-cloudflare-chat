@@ -4,23 +4,53 @@ export interface SubmissionInput {
   operationId: string;
   text: string;
 }
-export const submissionCancelKey = (sessionId: string) => `submission-cancel:${sessionId}`;
-const cancelled = () => new RequestError(409, "Submission cancelled. Start a new message to continue.");
+const submissionCancelKey = (sessionId: string) => `submission-cancel:${sessionId}`;
+const cancelled = () => new RequestError(409, "Submission cancelled. Send again to start a new message.", "submission_cancelled");
 type Store = Pick<DurableObjectStorage, "get" | "put" | "transaction">;
-/** Owns the exact-text binding, attempt quota and receipt journal.
- * Inputs are validated by the HTTP edge. Callers retain the Assistant POST queue:
- * this module adds no second queue and relies on SDK request-ID deduplication
- * when an accepted submission has no saved app receipt yet.
+export interface SubmissionRuntime<Receipt> {
+  isBusy(): Promise<boolean>;
+  submit(input: SubmissionInput): Promise<Receipt>;
+  abort(input: { sessionId: string; operationId?: string }): Promise<unknown>;
+}
+export type ArrivedSubmission<Receipt> = (
+  message: Pick<SubmissionInput, "operationId" | "text">,
+) => Promise<Receipt>;
+/** One owner for submission journals and cancellation lifetime.
+ * Capture atArrival() before entering the caller's existing mutation queue; invoke
+ * its one-shot capability inside that queue. Stop bypasses the queue. Auth,
+ * provider gating and title policy stay with the caller. SDK request-ID
+ * deduplication still recovers acceptance when app receipt persistence fails.
  */
 export class SubmissionAdmission<Receipt = unknown> {
-  constructor(
-    private store: Store,
-    private isBusy: () => Promise<boolean>,
-    private dispatch: (input: SubmissionInput) => Promise<Receipt>,
-    private abort: (input: SubmissionInput) => Promise<unknown> = async () => {},
-    private ready: (input: SubmissionInput) => Promise<void> = async () => {},
-  ) {}
-  async submit(input: SubmissionInput, epoch?: string): Promise<Receipt> {
+  private stops = new Map<string, Promise<unknown>>();
+  constructor(private store: Store, private runtime: SubmissionRuntime<Receipt>) {}
+  atArrival(sessionId: string): ArrivedSubmission<Receipt> {
+    const epoch = this.store.get<string>(submissionCancelKey(sessionId));
+    // A request can wait in the queue or fail validation without consuming this.
+    void epoch.catch(() => {});
+    let consumed = false;
+    return async ({ operationId, text }) => {
+      if (consumed) throw new Error("Submission arrival already consumed");
+      consumed = true;
+      return this.submit({ sessionId, operationId, text }, await epoch);
+    };
+  }
+  stop(sessionId: string): Promise<unknown> {
+    const prior = this.stops.get(sessionId);
+    const stop = (async () => {
+      await this.store.put(submissionCancelKey(sessionId), crypto.randomUUID());
+      await prior?.catch(() => {});
+      return this.runtime.abort({ sessionId });
+    })().finally(() => {
+      if (this.stops.get(sessionId) === stop) this.stops.delete(sessionId);
+    });
+    this.stops.set(sessionId, stop);
+    return stop;
+  }
+  private async waitForStop(sessionId: string) {
+    while (this.stops.has(sessionId)) await this.stops.get(sessionId);
+  }
+  private async submit(input: SubmissionInput, epoch?: string): Promise<Receipt> {
     const { sessionId, operationId, text } = input;
     const key = `admission:${sessionId}:${operationId}`;
     const digest = Array.from(
@@ -41,13 +71,13 @@ export class SubmissionAdmission<Receipt = unknown> {
         if (!prior) await this.store.put(key, { digest, epoch: reservedEpoch });
         // Only this live dispatch needs late-acceptance cleanup. Replaying an old
         // cancelled ID must never abort a newer intentional submission.
-        if (dispatchStarted) await this.abort(input);
+        if (dispatchStarted) await this.runtime.abort(input);
         throw cancelled();
       }
     };
     await checkCancellation();
     if (!prior) {
-      if (await this.isBusy())
+      if (await this.runtime.isBusy())
         throw new RequestError(409, "Wait for the current request to finish");
       const reserved = await this.store.transaction(async (tx) => {
         if (await tx.get<string>(submissionCancelKey(sessionId)) !== reservedEpoch) {
@@ -68,11 +98,11 @@ export class SubmissionAdmission<Receipt = unknown> {
     }
     // A session-wide Stop may still be reaching the SDK. New intent must wait
     // for it, then recheck its generation before entering dispatch.
-    await this.ready(input);
+    await this.waitForStop(sessionId);
     await checkCancellation();
     dispatchStarted = true;
     let receipt: Receipt;
-    try { receipt = await this.dispatch(input); }
+    try { receipt = await this.runtime.submit(input); }
     catch (error) { await checkCancellation(); throw error; }
     await checkCancellation();
     await this.store.put(key, { digest, receipt, epoch: reservedEpoch });
