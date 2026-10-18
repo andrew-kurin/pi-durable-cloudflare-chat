@@ -1,3 +1,4 @@
+import { readSiwcCatalog, type CatalogEvidence } from './siwc-catalog';
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 import { Type, type Message } from '@earendil-works/pi-ai';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
@@ -5,7 +6,7 @@ import { streamSimple } from '@earendil-works/pi-ai/api/openai-responses';
 import type { LocalSiwcCredential } from './siwc-auth';
 import type { RoundJournal } from './core';
 const TARGETS = ['gpt-6.1-sol', 'gpt-6-luna'] as const;
-export interface SiwcReport { catalog: { slug: string; display_name: string; visibility?: string }[]; checks: { model: string; status: string; requests: number; toolCalls: number; http: number[]; terminal: string[] }[] }
+export interface SiwcReport { catalogEvidence?: CatalogEvidence; catalog: { slug: string; display_name: string; visibility?: string }[]; checks: { model: string; status: string; requests: number; toolCalls: number; http: number[]; terminal: string[] }[] }
 /** A fixed one-shot LOCAL diagnostic, independent of pi-chat and its credentials.
  * Explicit transport/credential injection; no ambient fetch, OAuth or billing fallback. */
 export async function runLocalSiwcCheck(credential: LocalSiwcCredential, transport: typeof fetch, journal: RoundJournal, approved: boolean): Promise<SiwcReport> {
@@ -19,11 +20,8 @@ export async function runLocalSiwcCheck(credential: LocalSiwcCredential, transpo
   return new Response(new ReadableStream<Uint8Array>({ async pull(output) { try { const p = await reader.read(); if (p.done) output.close(); else { size += p.value.length; if (size > max) { controller.abort(); await reader.cancel(); throw Error('Receive limit'); } output.enqueue(p.value); } } catch { output.error(Error('Bounded stream interrupted')); } }, cancel: () => reader.cancel() }), { status: response.status, headers: response.headers });
  }
  try {
-  const catalog = await transport('https://api.openai.com/v1/models', { headers: { authorization: `Bearer ${credential.access}` }, redirect: 'error', signal: controller.signal });
-  if (!catalog.ok || !catalog.headers.get('content-type')?.includes('json') || !catalog.body) { await catalog.body?.cancel(); throw Error('Model catalog unavailable'); }
-  const data = await (await bounded(catalog, 262144)).json() as { models?: unknown };
-  if (!Array.isArray(data.models) || data.models.length > 1000) throw Error('Invalid model catalog');
-  report.catalog = data.models.map((m: any) => { if ([credential.access, credential.refresh, credential.idToken].filter(Boolean).some(secret => String(m.slug).includes(secret) || String(m.display_name).includes(secret))) throw Error('Unsafe catalog'); if (typeof m.slug !== 'string' || !/^[\w.-]{1,128}$/.test(m.slug) || typeof m.display_name !== 'string' || m.display_name.length > 200 || /[\x00-\x1f]/.test(m.display_name)) throw Error('Invalid model catalog entry'); return { slug: m.slug, display_name: m.display_name, ...(m.visibility === 'list' ? { visibility: 'list' } : {}) }; });
+  const catalogEvidence = await readSiwcCatalog(credential, transport); report.catalogEvidence = catalogEvidence; report.catalog = catalogEvidence.catalog;
+  if (catalogEvidence.outcome !== 'available') return report;
   for (const id of TARGETS) {
    const check: SiwcReport['checks'][number] = { model: id, status: 'unavailable', requests: 0, toolCalls: 0, http: [], terminal: [] }; report.checks.push(check);
    if (!report.catalog.some(model => model.slug === id)) continue;

@@ -12,7 +12,7 @@ The resource is `https://api.openai.com/v1`. The system browser authorizes at `h
 
 Returning sign-in reuses the issued client ID, verifies the original subject, and omits `id_token_hint` from the displayed authorization URL to prevent token logging. It may therefore show the account selector. Do not paste callback URLs, codes or credentials into chat. The CLI prints no callback/token/provider error text. No client secret or API key is used. Decline paid credits and do not authorize a different billing option if offered.
 
-The owner must separately approve the one-shot diagnostic, which performs one account-specific model-catalog GET and, only if actually listed, **at most two `gpt-6.1-sol` requests for one fixed `test_status` tool round-trip and one `gpt-6-luna` text request**. Tool execution only returns an in-memory marker. No files, shell, web tools, private context, API-key fallback, paid-credit opt-in, automatic refresh or retries. Receiving `response.completed` is required; interrupted/incomplete/failed streams fail. Global deadline 240s, per-model deadline 120s, 64 KiB received per inference response, 256 KiB catalog limit. No provider-side token ceiling is claimed: SIWC currently rejects `max_output_tokens`.
+The owner must separately approve the one-shot diagnostic, which performs one account-specific model-catalog GET and, only if actually listed, **at most two `gpt-6.1-sol` requests for one fixed `test_status` tool round-trip and one `gpt-6-luna` text request**. Tool execution only returns an in-memory marker. No files, shell, web tools, private context, API-key fallback, paid-credit opt-in, automatic refresh or retries. Receiving `response.completed` is required; interrupted/incomplete/failed streams fail. Global deadline 240s, per-model deadline 120s, 64 KiB received per inference response, 2 MiB catalog limit. No provider-side token ceiling is claimed: SIWC currently rejects `max_output_tokens`.
 
 ## Commands (prepared, not authorized/executed live)
 
@@ -40,3 +40,9 @@ Official guidance read October 18, 2026:
 - [Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
 
 Production wiring, remote authentication, VM credential transfer and hosted eligibility are outside this local action. No interest form is submitted. The new code remains local until separately approved for publication.
+
+## Catalog-only operational diagnosis
+
+`--catalog --approved-catalog-read` makes exactly one GET with the existing valid local SIWC access token and writes `catalog-evidence.json` (0600). It does not open or alter the inference journal, refresh credentials, change scopes or invoke inference. Evidence retains stage, exact HTTP/content type, request ID/Ray, credential-redacted structured errors, bounded useful body head/tail and schema details. On truncation, “tail” is the end of the received prefix, not the complete upstream body. If a non-documented `data` schema is returned, its observed IDs are labeled separately instead of treating it as a validated SIWC catalog.
+
+The directed October 18 catalog read returned HTTP 200 `application/json`, but the original 256 KiB receive cap truncated the large catalog (which includes model instruction metadata) before JSON parsing completed. The saved prefix lists `gpt-6.1-sol` / `GPT-6.1-Sol`, visibility `list`, `supported_in_api:true`; full model enumeration and Luna availability were not established. The inference fence and credentials were unchanged. The catalog cap is now 2 MiB for a future explicitly directed read; no second request was made to test that change. A cap/interruption is now reported at the body stage rather than as invalid upstream JSON.

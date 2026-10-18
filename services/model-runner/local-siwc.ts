@@ -5,12 +5,13 @@ import { mkdir, readFile, writeFile, rename, lstat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { createLocalJWKSet } from 'jose';
 import { SIWC, prepareSiwc, type LocalSiwcCredential } from './siwc-auth';
+import { readSiwcCatalog } from './siwc-catalog';
 import { runLocalSiwcCheck } from './siwc-check';
 import { fileRoundJournal } from './journal';
 const plan = { mode: 'local-personal-OSS-only; hosted hybrid eligibility unresolved', name: SIWC.name, issuer: SIWC.issuer, scope: SIWC.scopes, resource: SIWC.resource, callback: 'http://127.0.0.1:<ephemeral-port>/auth/callback', registration: 'dynamic_agent_client initially; retain issued client ID', persistence: '.runtime/local-siwc/credentials.json (0600), stable host ID; tokens stay on this Mac', billing: 'ChatGPT plan only; no API-key fallback or paid credits opt-in', diagnostic: 'one catalog GET, at most 2 Sol 6.1 requests + 1 Luna 6 request; no refresh/retries; unavailable models skipped' };
 const action = process.argv[2] ?? '--plan';
 if (action === '--plan') console.log(JSON.stringify(plan, null, 2));
-else if ((action !== '--sign-in' || process.argv[3] !== '--approved-local-oauth') && (action !== '--check' || process.argv[3] !== '--approved-local-check')) { console.error('Explicit action-time approval required. Use --plan first.'); process.exitCode = 1; }
+else if ((action !== '--sign-in' || process.argv[3] !== '--approved-local-oauth') && (action !== '--check' || process.argv[3] !== '--approved-local-check') && (action !== '--catalog' || process.argv[3] !== '--approved-catalog-read')) { console.error('Explicit action-time approval required. Use --plan first.'); process.exitCode = 1; }
 else {
  const dir = new URL('../../.runtime/local-siwc/', import.meta.url), credentialPath = new URL('credentials.json', dir);
  const protectedRead = async (path: URL) => { const stat = await lstat(path); if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) || stat.uid !== process.getuid?.()) throw Error('Unsafe local credential file'); return JSON.parse(await readFile(path, 'utf8')); };
@@ -42,8 +43,10 @@ else {
   } else {
    const ds = await lstat(dir); if (!ds.isDirectory() || ds.isSymbolicLink() || (ds.mode & 0o077)) throw Error('Unsafe state directory');
    const credential = await protectedRead(credentialPath) as LocalSiwcCredential;
+   if (action === '--catalog') { const report = await readSiwcCatalog(credential, fetch); await save(new URL('catalog-evidence.json', dir), report); console.log(JSON.stringify(report,null,2)); } else {
    const journal = await fileRoundJournal(new URL('diagnostic-rounds.jsonl', dir).pathname);
    try { const report = await runLocalSiwcCheck(credential, fetch, journal, true); await save(new URL('report.json', dir), report); console.log(JSON.stringify(report, null, 2)); } finally { await journal.close(); }
+   }
   }
  } catch { console.error('Local SIWC action stopped. No raw OAuth/token/provider details are printed. Check consent, selected account and local file permissions before any separately approved retry.'); process.exitCode = 1; }
 }
