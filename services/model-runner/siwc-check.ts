@@ -7,7 +7,7 @@ import { streamSimple } from '@earendil-works/pi-ai/api/openai-responses';
 import type { LocalSiwcCredential } from './siwc-auth';
 import type { RoundJournal } from './core';
 const TARGETS = ['gpt-6.1-sol', 'gpt-6-luna'] as const;
-export interface SiwcReport { catalogEvidence?: CatalogEvidence; catalog: { slug: string; display_name: string; visibility?: string }[]; checks: { model: string; status: string; requests: number; toolCalls: number; http: number[]; terminal: string[]; error?: string; sdkError?: string; evidence?: {status:number;contentType?:string;requestId?:string;cfRay?:string;bodyExcerpt?:string;bodyPresent?:boolean}[] }[] }
+export interface SiwcReport { catalogEvidence?: CatalogEvidence; catalog: { slug: string; display_name: string; visibility?: string }[]; checks: { model: string; status: string; requests: number; toolCalls: number; http: number[]; terminal: string[]; error?: string; sdkError?: string; evidence?: {status:number;contentType?:string;requestId?:string;cfRay?:string;bodyExcerpt?:string;bodyPresent?:boolean;headersCapturedAt?:'transport-return';bytesRead?:number;readError?:string;formatNote?:string}[] }[] }
 /** A fixed one-shot LOCAL diagnostic, independent of pi-chat and its credentials.
  * Explicit transport/credential injection; no ambient fetch, OAuth or billing fallback. */
 export async function runLocalSiwcCheck(credential: LocalSiwcCredential, transport: typeof fetch, journal: RoundJournal, approved: boolean): Promise<SiwcReport> {
@@ -21,9 +21,9 @@ export async function runLocalSiwcRounds(credential: LocalSiwcCredential, transp
  const clean=(value:string)=>redactDiagnosticCredentials(value,[credential.access,credential.refresh,credential.idToken]).slice(0,4096);
  const report: SiwcReport = { catalog: [], checks: [] };
  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 240000);
- async function bounded(response: Response, max: number) {
+ async function bounded(response: Response, max: number, evidence?: NonNullable<SiwcReport['checks'][number]['evidence']>[number]) {
   const reader = response.body!.getReader(); let size = 0;
-  return new Response(new ReadableStream<Uint8Array>({ async pull(output) { try { const p = await reader.read(); if (p.done) output.close(); else { size += p.value.length; if (size > max) { controller.abort(); await reader.cancel(); throw Error('Receive limit'); } output.enqueue(p.value); } } catch { output.error(Error('Bounded stream interrupted')); } }, cancel: () => reader.cancel() }), { status: response.status, headers: response.headers });
+  return new Response(new ReadableStream<Uint8Array>({ async pull(output) { try { const p = await reader.read(); if (p.done) output.close(); else { size += p.value.length; if(evidence)evidence.bytesRead=size; if (size > max) { controller.abort(); await reader.cancel(); throw Error('Receive limit'); } output.enqueue(p.value); } } catch(error) { if(evidence)evidence.readError=clean(error instanceof Error?error.message:String(error)); output.error(Error('Bounded stream interrupted')); } }, cancel: () => reader.cancel() }), { status: response.status, headers: response.headers });
  }
  try {
   report.catalogEvidence = catalogEvidence; report.catalog = catalogEvidence.catalog;
@@ -40,13 +40,15 @@ export async function runLocalSiwcRounds(credential: LocalSiwcCredential, transp
     const stream = streamSimple(model, normalizeContext({ messages, ...(id === TARGETS[0] ? { tools: [{ name: 'test_status', description: 'Fixed marker; no environment access.', parameters: Type.Object({}, { additionalProperties: false }) }] } : {}) }), { apiKey: credential.access, reasoning: 'low', maxRetries: 0, timeoutMs: 60000, signal: abort.signal,
      fetch: async (input, init) => {
       if (String(input) !== 'https://api.openai.com/v1/responses' || init?.method !== 'POST' || check.requests >= (id === TARGETS[0] ? 2 : 1)) throw Error('Outside fixed diagnostic');
-      await beforeRequest?.(id, round); check.requests++; await progress?.(report); const response = await transport(input, { ...init, redirect: 'error', signal: abort.signal }); check.http.push(response.status);
-      const evidence: NonNullable<SiwcReport['checks'][number]['evidence']>[number]={status:response.status,bodyPresent:!!response.body};
+      await beforeRequest?.(id, round); check.requests++; await progress?.(report); const response = await transport(input, { ...init, redirect: 'error', signal: init?.signal ? AbortSignal.any([init.signal,abort.signal]) : abort.signal }); check.http.push(response.status);
+      const evidence: NonNullable<SiwcReport['checks'][number]['evidence']>[number]={status:response.status,bodyPresent:!!response.body,headersCapturedAt:'transport-return'};
       for(const [header,key] of [['content-type','contentType'],['x-request-id','requestId'],['cf-ray','cfRay']] as const){const v=response.headers.get(header);if(v!==null)evidence[key]=clean(v);}
       (check.evidence??=[]).push(evidence);
       if (!response.ok) { const body=response.body?await (await bounded(response,65536)).text():''; evidence.bodyExcerpt=clean(body); await progress?.(report); return new Response(body,{status:response.status,headers:response.headers}); }
-      if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) { check.error='Expected SSE; content-type: '+(evidence.contentType??'absent')+'; body present: '+!!response.body; if(response.body)evidence.bodyExcerpt=clean(await (await bounded(response,65536)).text()); await progress?.(report); throw Error(check.error); }
-      return bounded(response, 65536);
+      const mediaType=response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
+      if (!response.body || (mediaType && mediaType!=='text/event-stream')) { check.error='Expected SSE; content-type: '+(evidence.contentType??'absent')+'; body present: '+!!response.body; if(response.body)evidence.bodyExcerpt=clean(await (await bounded(response,65536)).text()); await progress?.(report); throw Error(check.error); }
+      if(!mediaType)evidence.formatNote='Content-Type absent; require valid SSE and response.completed';
+      return bounded(response, 65536, evidence);
      },
      onPayload: raw => {
       const p = raw as Record<string, any>, tools = p.tools;
