@@ -187,6 +187,16 @@ export class Assistant extends DurableObject<Env> {
         path.startsWith("/api/workspaces")
       )
         await this.chatCatalog.requireActive(sid);
+      if (path === "/api/openai-check/status" && request.method === "GET")
+        return Response.json(await this.providers.openaiCheckStatus());
+      if (path === "/api/openai-check/run" && request.method === "POST") {
+        const raw = await request.text();
+        if (raw.length > 100) throw new RequestError(400, "Approve the fixed check");
+        const body = jsonObject(raw);
+        if (Object.keys(body).length !== 1 || body.approved !== true) throw new RequestError(400, "Approve the fixed check");
+        if ((await this.harness.sessions.list()).some(s => s.busy)) throw new RequestError(409, "Wait for the current chat request to finish");
+        return Response.json(await this.providers.runApprovedOpenAICheck(request.signal));
+      }
       if (path.startsWith("/api/grok/")) {
         if (this.env.ENABLE_GROK_SUBSCRIPTION !== "true")
           return Response.json(
