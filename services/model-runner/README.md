@@ -49,3 +49,5 @@ This emits a fake `test_status` call. No tool runs on the service. Repeating tha
 5. Design authenticated TLS service access, account binding, body/stream limits, health/upgrade/rollback, deployment fence compatibility and restart behavior. Wire Worker Stop through the actual HTTP hop and prove admission/harness replay cannot generate a new round ID for uncertain work. Existing submission IDs are not round IDs. Add owner status/UI/disconnect separately; no production feature flag is introduced here.
 
 Offline tests prove the boundary and fail-closed behavior with fake credentials/inference, not live eligibility, OAuth security, network availability, upstream cancellation confirmation or production recovery.
+
+A separate [local SIWC compatibility check](LOCAL-SIWC.md) is prepared behind explicit action-time OAuth and diagnostic approval. Its default command only prints a plan. No live sign-in, real model catalog or inference has been run; this does not change the fake runner or production routing.
