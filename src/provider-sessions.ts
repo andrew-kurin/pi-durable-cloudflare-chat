@@ -1,5 +1,6 @@
 import { openaiFailureReport, openaiCheckReports, runOpenAIChecks, OPENAI_CHECK_MODELS, OPENAI_CHECK_BUDGET } from "./openai-compat-check";
 import { createModels } from "@earendil-works/pi-ai/models";
+import type { Provider } from "@earendil-works/pi-ai/models";
 import type { CredentialStore, Models } from "@earendil-works/pi-ai";
 import { createWorkerCodexProvider } from "./oauth-loader";
 import {
@@ -30,13 +31,18 @@ export interface ProviderConfig {
   GROK_CHAT_MODEL?: string;
 }
 /** Static provider wiring never reads host environment/files or starts OAuth. */
-export function createChatModels(credentials: CredentialStore) {
+export function createChatModels(credentials: CredentialStore, offlinePrototype?: Provider) {
   const models = createModels({
     credentials,
     authContext: { env: async () => undefined, fileExists: async () => false },
   });
   models.setProvider(createWorkerCodexProvider());
   models.setProvider(createWorkerGrokProvider());
+  // Explicit offline injection only; production callers provide no override.
+  if (offlinePrototype) {
+    if (offlinePrototype.id !== "model-runner-prototype") throw Error("Expected offline prototype provider");
+    models.setProvider(offlinePrototype);
+  }
   return models;
 }
 type Store = CredentialStorage & Pick<DurableObjectStorage, "sql">;
