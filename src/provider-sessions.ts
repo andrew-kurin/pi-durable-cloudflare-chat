@@ -31,17 +31,17 @@ export interface ProviderConfig {
   GROK_CHAT_MODEL?: string;
 }
 /** Static provider wiring never reads host environment/files or starts OAuth. */
-export function createChatModels(credentials: CredentialStore, offlinePrototype?: Provider) {
+export function createChatModels(credentials: CredentialStore, runnerProvider?: Provider) {
   const models = createModels({
     credentials,
     authContext: { env: async () => undefined, fileExists: async () => false },
   });
   models.setProvider(createWorkerCodexProvider());
   models.setProvider(createWorkerGrokProvider());
-  // Explicit offline injection only; production callers provide no override.
-  if (offlinePrototype) {
-    if (offlinePrototype.id !== "model-runner-prototype") throw Error("Expected offline prototype provider");
-    models.setProvider(offlinePrototype);
+  // Explicit runner injection only; production callers provide no override.
+  if (runnerProvider) {
+    if (!["model-runner-prototype", "model-runner-siwc"].includes(runnerProvider.id)) throw Error("Expected explicit runner provider");
+    models.setProvider(runnerProvider);
   }
   return models;
 }
