@@ -42,7 +42,7 @@ test('native HTTP authenticated provider tool roundtrip preserves full context a
  const f = fixture(), server = createRunnerServer(f.runner); server.listen(0, '127.0.0.1'); await once(server, 'listening');
  const port = (server.address() as import('node:net').AddressInfo).port;
  try {
-  const transport = (async (input: any) => { const req = input as Request; assert.equal(req.redirect, 'error'); assert.equal(req.headers.has('authorization'), false); assert.equal(req.headers.has('cookie'), false); return fetch(`http://127.0.0.1:${port}/v1/responses`, { method: req.method, body: await req.text(), headers: req.headers, signal: req.signal }); }) as typeof fetch;
+  const transport = (async (input: any) => { const req = input as Request; assert.equal(req.redirect, 'manual'); assert.equal(req.headers.has('authorization'), false); assert.equal(req.headers.has('cookie'), false); return fetch(`http://127.0.0.1:${port}/v1/responses`, { method: req.method, body: await req.text(), headers: req.headers, signal: req.signal }); }) as typeof fetch;
   const messages: Message[] = [{ role: 'user', content: 'fixture', timestamp: 1 }], tools = [{ name: 'test_status', description: 'fixed marker', parameters: Type.Object({}) }];
   const store = { read: async () => undefined, list: async () => [], modify: async () => { throw Error(); } } as any;
   let round = 0;
@@ -89,4 +89,8 @@ test('Stop during durable reservation never starts credential refresh',async()=>
  const entered=deferred<void>(),gate=deferred<void>(),abort=new AbortController();let accesses=0;
  const f=fixture({journal:{reserve:async()=>{entered.resolve();await gate.promise;return 'new';}},credentials:{access:async()=>{accesses++;return 'SYNTHETIC';}}});
  const wait=f.runner(await request('round-fsync-stop',JSON.stringify(payload),abort.signal));await entered.promise;abort.abort();gate.resolve();assert.equal((await wait).status,502);assert.equal(accesses,0);assert.equal(f.calls.length,0);
+});
+test('Worker-compatible manual redirect mode rejects every redirect without forwarding signed bytes',async()=>{
+ let calls=0,canceled=0;const p=createSiwcRunnerProvider({endpoint:'https://runner.example/v1/responses',key,roundId:'redirect-fixture',fetch:async input=>{calls++;assert.equal((input as Request).redirect,'manual');return new Response(new ReadableStream({cancel(){canceled++;}}),{status:307,headers:{location:'https://other.example/steal'}});}});
+ const result=(await collect(p.streamSimple(p.getModels()[0],{messages:[{role:'user',content:'fixture',timestamp:1}]}))).result;assert.equal(result.stopReason,'error');assert.equal(isRetryableAssistantError(result),false);assert.match(result.errorMessage,/redirect rejected/);assert.equal(calls,1);assert.equal(canceled,1);
 });

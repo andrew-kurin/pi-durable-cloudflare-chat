@@ -18,5 +18,6 @@ export function delegateModel(
   model: ChatModel,
   fallback: ChatModel = { provider: "openai-codex", modelId: "gpt-6-luna" },
 ): ChatModel {
+  if (model.provider === "model-runner-siwc") return { provider: "model-runner-siwc", modelId: "gpt-6-luna" };
   return model.provider === "xai" ? model : fallback;
 }

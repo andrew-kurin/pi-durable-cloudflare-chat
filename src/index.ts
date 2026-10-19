@@ -1,3 +1,4 @@
+import { createWorkerRunnerProvider, runnerConfigured, type RunnerConfig } from "./model-runner-worker";
 import { CODEX_CHAT_MODEL } from "./chat-model";
 import { ProviderSessions, createChatModels } from "./provider-sessions";
 import { HistoryFeed } from "./history-feed";
@@ -31,7 +32,7 @@ import { createCredentialStore } from "./credentials";
 declare const PI_DEPLOYMENT_MODE: string;
 const deploymentMode =
   typeof PI_DEPLOYMENT_MODE === "undefined" ? "local" : PI_DEPLOYMENT_MODE;
-interface Env extends AccessConfig {
+interface Env extends AccessConfig, RunnerConfig {
   ASSETS: Fetcher;
   Assistant: DurableObjectNamespace<Assistant>;
   CREDENTIAL_ENCRYPTION_KEY: string;
@@ -61,7 +62,9 @@ export class Assistant extends DurableObject<Env> {
     this.ctx.storage,
     this.env.CREDENTIAL_ENCRYPTION_KEY,
   );
-  private models = guardModels(createChatModels(this.credentials), async () => {
+  private models = guardModels(createChatModels(this.credentials,
+    runnerConfigured(this.env) ? createWorkerRunnerProvider(this.env, this.ctx.storage, this.ctx.id.toString(), (input, init) => globalThis.fetch(input, init)) : undefined,
+  ), async () => {
     if (this.env.ENABLE_MODEL !== "true") throw new Error("Model disabled");
     await this.ctx.storage.transaction(async (tx) => {
       const day = new Date().toISOString().slice(0, 10);
@@ -112,7 +115,7 @@ export class Assistant extends DurableObject<Env> {
       );
     },
     defaults: {
-      model: { provider: "openai-codex", id: "gpt-6-sol" },
+      model: runnerConfigured(this.env) ? { provider: "model-runner-siwc", id: "gpt-6.1-sol" } : { provider: "openai-codex", id: "gpt-6-sol" },
       thinkingLevel: "low",
     },
   });

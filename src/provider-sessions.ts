@@ -1,3 +1,4 @@
+import { runnerConfigured, type RunnerConfig } from "./model-runner-worker";
 import { openaiFailureReport, openaiCheckReports, runOpenAIChecks, OPENAI_CHECK_MODELS, OPENAI_CHECK_BUDGET } from "./openai-compat-check";
 import { createModels } from "@earendil-works/pi-ai/models";
 import type { Provider } from "@earendil-works/pi-ai/models";
@@ -24,7 +25,7 @@ import {
   type ChatModel,
 } from "./chat-model";
 import { RequestError } from "./http-input";
-export interface ProviderConfig {
+export interface ProviderConfig extends RunnerConfig {
   ENABLE_MODEL?: string;
   ENABLE_SUBSCRIPTION_LOGIN?: string;
   ENABLE_GROK_SUBSCRIPTION?: string;
@@ -66,11 +67,13 @@ export class ProviderSessions {
     private prepareCodexLogin: () => Promise<unknown>,
   ) {}
   private async connected(provider: string) {
+    if (provider === "model-runner-siwc") return runnerConfigured(this.config);
     return (await this.credentials.list()).some(
       (c) => c.providerId === provider && c.type === "oauth",
     );
   }
   defaultChatModel() {
+    if (runnerConfigured(this.config)) return { provider: "model-runner-siwc", modelId: "gpt-6.1-sol" };
     return this.config.ENABLE_GROK_SUBSCRIPTION === "true"
       ? newChatModel(this.config.GROK_CHAT_MODEL)
       : { ...CODEX_CHAT_MODEL };

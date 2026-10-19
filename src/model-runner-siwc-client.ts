@@ -8,7 +8,7 @@ import { ROUND_ID, RUNNER_MODELS, RUNNER_PATH, signRound, siwcPayload } from './
 /** Explicit per-round provider. Caller MUST durably reserve roundId before use,
  * restore the same ID after interruption, and create a distinct ID for tool continuation.
  * No environment defaults and no OpenAI credentials ever enter this Worker. */
-export function createSiwcRunnerProvider(connection: { endpoint: string; key: CryptoKey; roundId: string; fetch: typeof fetch; now?: () => number }) {
+export function createSiwcRunnerProvider(connection: { endpoint: string; key: CryptoKey; roundId: string; fetch: typeof fetch; now?: () => number; beforeDispatch?: (body: string) => Promise<'new' | 'duplicate' | 'conflict'> }) {
   const target = new URL(connection.endpoint);
   if (target.protocol !== 'https:' || target.username || target.password || target.search || target.hash || target.pathname !== RUNNER_PATH || !ROUND_ID.test(connection.roundId)) throw Error('Explicit HTTPS runner and durable round ID required');
   const id = connection.roundId;
@@ -19,9 +19,13 @@ export function createSiwcRunnerProvider(connection: { endpoint: string; key: Cr
         if (String(input) !== 'https://model-runner.invalid/v1/responses' || init?.method !== 'POST' || typeof init.body !== 'string') throw Error('Outside runner contract');
         const body = JSON.stringify(siwcPayload(JSON.parse(init.body)));
         if (new TextEncoder().encode(body).length > 131072) throw Error('Runner input limit');
+        init.signal?.throwIfAborted();
+        const reservation = await connection.beforeDispatch?.(body);
+        if (reservation && reservation !== 'new') { code = reservation === 'conflict' ? 'worker_round_conflict' : 'worker_round_already_reserved'; throw Error('Worker round fenced'); }
+        init.signal?.throwIfAborted();
         // Caller auth/cookie/custom-fetch options cannot cross this boundary.
-        const response = await connection.fetch(new Request(target, { method: 'POST', body, signal: init.signal, redirect: 'error', headers: await signRound(connection.key, body, id, connection.now?.()) }));
-        if (response.redirected) { void response.body?.cancel().catch(() => {}); throw Error('Unexpected redirect'); }
+        const response = await connection.fetch(new Request(target, { method: 'POST', body, signal: init.signal, redirect: 'manual', headers: await signRound(connection.key, body, id, connection.now?.()) }));
+        if (response.redirected || (response.status >= 300 && response.status < 400)) { code = 'runner_redirect_rejected'; void response.body?.cancel().catch(() => {}); throw Error('Unexpected redirect'); }
         if (!response.ok) {
           // Read only bounded, allowlisted service codes; never preserve upstream text.
           const known = ['transport_auth_failed', 'round_conflict', 'round_already_reserved', 'unsupported_siwc_request', 'siwc_reauthorization_required', 'siwc_access_denied', 'siwc_usage_limited', 'siwc_provider_rejected', 'siwc_refresh_resolution_required', 'siwc_refresh_deferred', 'siwc_credential_invalid', 'siwc_round_interrupted', 'round_cancelled'];
@@ -30,7 +34,21 @@ export function createSiwcRunnerProvider(connection: { endpoint: string; key: Cr
           throw Error('Runner rejected round');
         }
         if (response.headers.get('x-pi-round-id') !== id) { void response.body?.cancel().catch(() => {}); throw Error('Round response mismatch'); }
-        return response;
+        // Own the underlying reader so Stop cancels the body even when the
+        // runtime/SDK has already resolved fetch and only cancels its parser.
+        if (!response.body) throw Error('Missing runner stream');
+        const reader = response.body.getReader(), signal = options?.signal ?? init.signal;
+        const stop = () => { void reader.cancel().catch(() => {}); };
+        const finish = () => signal?.removeEventListener('abort', stop);
+        signal?.addEventListener('abort', stop, { once: true });
+        if (signal?.aborted) stop();
+        return new Response(new ReadableStream<Uint8Array>({
+          async pull(output) {
+            try { signal?.throwIfAborted(); const part = await reader.read(); signal?.throwIfAborted(); if (part.done) { finish(); output.close(); } else output.enqueue(part.value); }
+            catch { finish(); stop(); output.error(Error('Runner stream interrupted')); }
+          },
+          async cancel() { finish(); await reader.cancel().catch(() => {}); },
+        }), { status: response.status, headers: response.headers });
       },
       onPayload: async (payload, selected) => siwcPayload(await options?.onPayload?.(payload, selected) ?? payload),
     });

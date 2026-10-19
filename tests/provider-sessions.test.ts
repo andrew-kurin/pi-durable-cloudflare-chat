@@ -245,3 +245,10 @@ test("cancelling the login response stream stops setup and publishes only saniti
   assert.equal(status.login.status, "cancelled");
   assert.ok(!JSON.stringify(status).includes("PRIVATE_CANCEL_DETAIL"));
 });
+test('runner policy selects Sol/Luna only when explicitly configured, without copying an OAuth credential',async()=>{
+ const config={ENABLE_MODEL:'true',ENABLE_MODEL_RUNNER:'true',MODEL_RUNNER_ENDPOINT:'https://runner.example/v1/responses',MODEL_RUNNER_TRANSPORT_KEY:'07'.repeat(32)};
+ const f=fixture(config);assert.deepEqual(await f.providers.newChatModel(),{provider:'model-runner-siwc',modelId:'gpt-6.1-sol'});assert.deepEqual(delegateModel(await f.providers.newChatModel()),{provider:'model-runner-siwc',modelId:'gpt-6-luna'});assert.deepEqual(f.rows,[]);
+ const selected={provider:'model-runner-siwc',modelId:'gpt-6.1-sol'},status=await f.providers.status(selected);assert.equal(status.connected,true);assert.equal(status.canLogin,false);await f.providers.assertCanSubmit(async()=>selected);
+ f.config.ENABLE_MODEL_RUNNER='false';assert.equal((await f.providers.status(selected)).connected,false);await assert.rejects(f.providers.assertCanSubmit(async()=>selected));assert.deepEqual(f.providers.defaultChatModel(),{provider:'openai-codex',modelId:'gpt-6-sol'});
+ const malformed=fixture({...config,ENABLE_MODEL_RUNNER:'true',MODEL_RUNNER_TRANSPORT_KEY:''});await assert.rejects(malformed.providers.newChatModel(),/Invalid runner/);
+});

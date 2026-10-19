@@ -16,6 +16,12 @@ if (!['production','staging'].includes(target)) throw new Error('Invalid deploym
 const workerName = target === 'staging' ? 'pi-private-chat-workspace-staging' : 'pi-private-chat';
 const modelEnabled = target === 'staging' ? 'false' : flag('ENABLE_MODEL');
 const loginEnabled = target === 'staging' ? 'false' : flag('ENABLE_SUBSCRIPTION_LOGIN');
+const runnerEnabled = target === 'staging' ? 'false' : flag('ENABLE_MODEL_RUNNER');
+const runnerEndpoint = runnerEnabled === 'true' ? required('MODEL_RUNNER_ENDPOINT') : '';
+if (runnerEnabled === 'true') {
+  const endpoint = new URL(runnerEndpoint);
+  if (endpoint.protocol !== 'https:' || endpoint.pathname !== '/v1/responses' || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error('Invalid runner endpoint');
+}
 const grokEnabled = target === 'staging' ? 'false' : flag('ENABLE_GROK_SUBSCRIPTION');
 const webSearchEnabled = target === 'staging' ? 'false' : flag('ENABLE_WEB_SEARCH');
 const webSearchTest = target === 'staging' ? 'false' : flag('ENABLE_WEB_SEARCH_TEST');
@@ -28,6 +34,7 @@ if (workspaceEnabled === 'true' && workspaceProvisioned !== 'true') throw new Er
 const repository = process.env.WORKSPACE_REPOSITORY?.trim() || '';
 const image = process.env.WORKSPACE_IMAGE_REFERENCE?.trim() || '';
 if (webSearchEnabled === 'true' && webSearchTest === 'true') throw new Error('Disable search test mode before enabling normal web search');
+if (runnerEnabled === 'true' && (modelEnabled !== 'true' || loginEnabled === 'true' || grokEnabled === 'true')) throw new Error('Runner requires model use with other provider setup disabled');
 if (modelEnabled === 'true' && loginEnabled === 'true') throw new Error('Disable subscription setup before enabling model use');
 
 const accountId = required('CLOUDFLARE_ACCOUNT_ID');
@@ -85,12 +92,14 @@ const mode = modelEnabled === 'true' ? 'chat' : loginEnabled === 'true' ? 'setup
 config.define = { ...(config.define || {}), PI_DEPLOYMENT_MODE: JSON.stringify(`${mode}:web-${webSearchEnabled}:test-${webSearchTest}:origin-${app.hostname}`) };
 if (workspaceProvisioned === 'true') config.define.PI_DEPLOYMENT_MODE = JSON.stringify(`${mode}:web-${webSearchEnabled}:test-${webSearchTest}:origin-${app.hostname}:workspace-${workspaceEnabled}:smoke-${workspaceSmoke}:${image}:${repository}`);
 if(grokEnabled==='true')config.define.PI_DEPLOYMENT_MODE=JSON.stringify(JSON.parse(config.define.PI_DEPLOYMENT_MODE)+':grok-true');
+if (runnerEnabled === 'true') config.define.PI_DEPLOYMENT_MODE = JSON.stringify(JSON.parse(config.define.PI_DEPLOYMENT_MODE) + ':runner-' + runnerEndpoint);
 config.vars = {
   ACCESS_TEAM_DOMAIN: teamDomain,
   ACCESS_AUD: aud,
   OWNER_EMAILS: [...new Set(owners)].join(','),
   APP_ORIGIN: origin,
   ENABLE_MODEL: modelEnabled,
+  ENABLE_MODEL_RUNNER: runnerEnabled,
   ENABLE_SUBSCRIPTION_LOGIN: loginEnabled,
   ENABLE_GROK_SUBSCRIPTION: grokEnabled,
   ENABLE_WEB_SEARCH: webSearchEnabled,
@@ -98,6 +107,8 @@ config.vars = {
   ENABLE_WORKSPACE: workspaceEnabled,
   ENABLE_WORKSPACE_SMOKE: workspaceSmoke,
 };
+if (runnerEnabled === 'true') config.vars.MODEL_RUNNER_ENDPOINT = runnerEndpoint;
+// MODEL_RUNNER_TRANSPORT_KEY is provisioned separately as a Worker secret.
 if (workspaceProvisioned === 'true') Object.assign(config.vars, { WORKSPACE_REPOSITORY: repository, WORKSPACE_IMAGE: 'workspace' });
 // Leave cancellation/export margin within the separately approved 15-minute smoke window.
 if (workspaceSmoke === 'true') config.vars.WORKSPACE_LIMITS = JSON.stringify({ taskMs: 12 * 60000, commandMs: 10 * 60000, idleMs: 60000, warningMs: 60000 });
