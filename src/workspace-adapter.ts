@@ -1,10 +1,35 @@
 import {DEFAULT_WORKSPACE_LIMITS,projectPath,type WorkspaceAdapter,type WorkspaceExport} from './workspace';
 const ROOT='/workspace/project',PROCESSES='/var/lib/pi-processes';
-// Request-independent process records, following Sandbox 1.0's PID + boot-ID pattern.
-export const PROCESS_RUN=`ulimit -f 32768
-dir=$1; shift
-setsid sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" "$@" >"$dir/stdout.log" 2>"$dir/stderr.log"
-echo "$?" >"$dir/exit-code.tmp" && mv "$dir/exit-code.tmp" "$dir/exit-code"`;
+// Request-independent supervisor; only captured logs are bounded, never command files.
+export const PROCESS_RUN=`import os,sys,subprocess,selectors,signal
+from pathlib import Path
+directory=Path(sys.argv[1]); limit=16384
+for name in ('stdout','stderr'): (directory/(name+'.log')).write_bytes(b'')
+def record_exit(code):
+ (directory/'exit-code.tmp').write_text(str(code)); os.replace(directory/'exit-code.tmp',directory/'exit-code')
+try:process=subprocess.Popen(sys.argv[2:],stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+except OSError as error:
+ (directory/'stderr.log').write_bytes(str(error).encode()[-limit:])
+ record_exit(127 if isinstance(error,FileNotFoundError) else 126); sys.exit(0)
+try:
+ (directory/'pid').write_text(str(process.pid)+' '+Path('/proc/sys/kernel/random/boot_id').read_text().strip()+'\\n')
+ selector=selectors.DefaultSelector(); tails={}
+ for name,stream in (('stdout',process.stdout),('stderr',process.stderr)):
+  selector.register(stream,selectors.EVENT_READ,name); tails[name]=b''
+ while selector.get_map():
+  for key,_ in selector.select():
+   chunk=os.read(key.fd,65536)
+   if not chunk:
+    selector.unregister(key.fileobj); key.fileobj.close(); continue
+   name=key.data; tails[name]=(tails[name]+chunk)[-limit:]
+   temporary=directory/(name+'.log.tmp'); temporary.write_bytes(tails[name]); os.replace(temporary,directory/(name+'.log'))
+ selector.close()
+ code=process.wait(); code=code if code>=0 else 128-code
+ record_exit(code)
+finally:
+ if process.poll() is None:
+  os.killpg(process.pid,signal.SIGKILL); process.wait()
+`;
 const CURRENT=`current() { read -r pid boot 2>/dev/null <"$1/pid" && [ "$boot" = "$(cat /proc/sys/kernel/random/boot_id)" ]; }`;
 export const PROCESS_STATUS=`${CURRENT}
 dir=$1
@@ -14,7 +39,7 @@ elif [ ! -e "$dir/pid" ]; then echo starting
 elif current "$dir" && kill -0 "$pid" 2>/dev/null; then echo running
 else echo lost; fi`;
 // Simple relative-path and resolved-path check; no hostile-repository policy layer.
-export const FILE_OPERATION=`import os,sys,json
+export const FILE_OPERATION=`import os,sys,json,stat,tempfile
 root='/workspace/project'; action,path=sys.argv[1:3]; target=os.path.realpath(os.path.join(root,path))
 if os.path.commonpath([root,target])!=root: raise Exception('Path outside project')
 if action=='read':
@@ -29,8 +54,14 @@ else:
   if os.path.getsize(target)>64000:raise Exception('File too large')
   with open(target,encoding='utf8') as f:text=f.read()
   if text.count(old)!=1:raise Exception('Expected one exact match')
-  with open(target+'.pi-partial','w',encoding='utf8') as f:f.write(text.replace(old,new,1))
-  os.replace(target+'.pi-partial',target)
+  mode=stat.S_IMODE(os.stat(target).st_mode)
+  fd,temporary=tempfile.mkstemp(prefix='.pi-edit-',dir=os.path.dirname(target))
+  try:
+   with os.fdopen(fd,'w',encoding='utf8') as f:
+    f.write(text.replace(old,new,1)); f.flush(); os.fchmod(f.fileno(),mode)
+   os.replace(temporary,target)
+  finally:
+   if os.path.exists(temporary):os.unlink(temporary)
 `;
 export class ContainerWorkspaceAdapter implements WorkspaceAdapter {
  constructor(private container:Container,private image:string){}
@@ -55,7 +86,7 @@ export class ContainerWorkspaceAdapter implements WorkspaceAdapter {
   const dir=PROCESSES+'/'+id;await this.run(['mkdir',dir],signal);
   // Refuse paths that resolve outside the cloned tree, including symlinks.
   const resolved=(await this.run(['realpath','-e',ROOT+'/'+projectPath(cwd)],signal)).trim();if(resolved!==ROOT&&!resolved.startsWith(ROOT+'/'))throw Error('Command cwd outside project');
-  const p=await this.container.exec(['sh','-c',PROCESS_RUN,'sh',dir,...argv],{cwd:resolved,signal,stdout:'ignore',stderr:'ignore'});
+  const p=await this.container.exec(['python3','-c',PROCESS_RUN,dir,...argv],{cwd:resolved,signal,stdout:'ignore',stderr:'ignore'});
   // Do not await this request-owned handle. Later requests use persisted guest files.
   void p.exitCode.catch(()=>{});
  }
