@@ -28,7 +28,7 @@ export async function startLiveServer(configPath: string) {
     const journalPath = join(c.stateDirectory, 'rounds.jsonl');
     try { await readProtected(journalPath, 2000000); } catch (e: any) { if (e.code !== 'ENOENT') throw e; }
     journal = await fileRoundJournal(journalPath);
-    const server = createRunnerServer(createSiwcRunner({ key, journal, credentials: owner, fetch: globalThis.fetch }));
+    const server = createRunnerServer(createSiwcRunner({ key, journal, credentials: owner, fetch: globalThis.fetch, diagnostic: record=>console.info(JSON.stringify(record)) }));
     server.headersTimeout = 10000; server.requestTimeout = 15000;
     await new Promise<void>((ok, fail) => { server.once('error', fail); server.listen(c.port, '127.0.0.1', () => { server.off('error', fail); ok(); }); });
     let stopped = false;
