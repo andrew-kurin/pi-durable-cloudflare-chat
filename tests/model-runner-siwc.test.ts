@@ -111,3 +111,16 @@ test('stream diagnostics distinguish missing completion from provider SSE errors
   if(mode==='failed')assert.deepEqual(records.find(r=>r.outcome==='provider_stream_error')!.error,{code:'server_error',message:'upstream service unavailable'});
  }
 });
+test('native HTTP stream failure after 200 is a nonretryable client interruption, with exact private reason',async()=>{
+ for(const mode of ['truncated','provider-failed']) {
+  const diagnostics:Record<string,unknown>[]=[];let dispatches=0,status:number|undefined;
+  const f=fixture({diagnostic:r=>diagnostics.push(r),fetch:async()=>{dispatches++;return new Response(new ReadableStream<Uint8Array>({start(out){out.enqueue(new TextEncoder().encode('data: {"type":"response.created","response":{"id":"resp_native"}}\n\n'));setTimeout(()=>{if(mode==='provider-failed')out.enqueue(new TextEncoder().encode('data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"fixed upstream failure"}}}\n\n'));out.close();},5);}}));}});
+  const server=createRunnerServer(f.runner);server.listen(0,'127.0.0.1');await once(server,'listening');const port=(server.address() as import('node:net').AddressInfo).port;
+  try {
+   const p=createSiwcRunnerProvider({endpoint:'https://runner.example/v1/responses',key,roundId:'native-failure-'+mode,fetch:async input=>{const q=input as Request;const r=await fetch('http://127.0.0.1:'+port+'/v1/responses',{method:'POST',body:await q.text(),headers:q.headers,signal:q.signal});status=r.status;return r;}});
+   const result=await collect(p.streamSimple(p.getModels()[0],{messages:[{role:'user',content:'synthetic',timestamp:1}]},{maxRetries:9}));
+   assert.equal(status,200);assert.equal(result.result.stopReason,'error');assert.match(result.result.errorMessage,/runner transport interrupted/);assert.equal(isRetryableAssistantError(result.result),false);assert.equal(dispatches,1);assert.equal(f.journal.rounds.size,1);
+   assert.equal(diagnostics.find(r=>r.outcome==='stream_interrupted')!.message,mode==='truncated'?'missing_completion':'provider_stream_failed');
+  }finally{server.closeAllConnections();await new Promise<void>(ok=>server.close(()=>ok()));}
+ }
+});
