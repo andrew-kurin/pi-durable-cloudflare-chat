@@ -51,7 +51,7 @@ test('reopening an interrupted actual generation retains its round fence instead
 });
 test('Worker rejects missing identity, failed persistence, duplicate/conflicting recovery and cross-object collisions',async()=>{
  const persisted=store(),fence=workerRoundFence(persisted as any,'object-one'),id=await fence.identity('task-1','conversation-1');assert.equal(await workerRoundFence(persisted as any,'object-one').identity('task-1','conversation-1'),id);assert.notEqual(await workerRoundFence(persisted as any,'object-two').identity('task-1','conversation-1'),id);
- assert.deepEqual(await Promise.all([fence.reserve(id,'one','task-1','conversation-1'),fence.reserve(id,'one','task-1','conversation-1')]),['new','duplicate']);assert.equal(await fence.reserve(id,'different','task-1','conversation-1'),'conflict');
+ assert.deepEqual((await Promise.all([fence.reserve(id,'one','task-1','conversation-1'),fence.reserve(id,'one','task-1','conversation-1')])).sort(),['duplicate','new']);assert.equal(await fence.reserve(id,'different','task-1','conversation-1'),'conflict');
  let dispatches=0;const noTransport=(async()=>{dispatches++;throw Error('Must not dispatch');}) as typeof fetch;
  for(const options of [undefined,{headers:{'x-pi-generation-task':'task-1','x-pi-conversation':'conversation-1'}}]){const provider=createWorkerRunnerProvider(config,{transaction:async()=>{throw Error('Persistence failed');}} as any,'object-one',noTransport),models=createChatModels(credentialStore,provider);const r=await models.streamSimple(models.getModel(provider.id,'gpt-6.1-sol')!,{messages:[{role:'user',content:'fixture',timestamp:1}]},options).result();assert.equal(r.stopReason,'error');assert.equal(isRetryableAssistantError(r),false);}assert.equal(dispatches,0);
 });
