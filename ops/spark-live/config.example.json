@@ -1,0 +1,12 @@
+{
+  "eligibility": "confirmed-for-this-deployment",
+  "port": 4320,
+  "identity": {
+    "clientId": "<preserved-issued-client-id>",
+    "subject": "<preserved-validated-subject>",
+    "hostId": "urn:uuid:<distinct-stable-Spark-host-id>"
+  },
+  "credentialPath": "/home/andrewkurin/.config/pi-model-runner/credentials.json",
+  "transportKeyPath": "/home/andrewkurin/.config/pi-model-runner/transport-key.hex",
+  "stateDirectory": "/home/andrewkurin/.local/state/pi-model-runner"
+}

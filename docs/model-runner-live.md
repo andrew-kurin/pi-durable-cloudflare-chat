@@ -175,8 +175,11 @@ and `/tmp/pi-cloudflare-runner-stop.log`; passing native transport evidence is
 shared mutable policy fixture errors were corrected; no test failure is hidden by
 skipping or weakening duplicate/cancellation assertions.
 
-No new real-model test was run. Prior bounded Mac SIWC diagnostic results remain in
-`services/model-runner/LIVE-RESULTS.md`; their one-shot fences/budgets were already
-consumed. This implementation does not reuse them, inspect/copy their credentials,
-refresh a session, or claim new real-model/production evidence. Hosted eligibility
-is an activation prerequisite, not an implementation blocker.
+No real-model test was performed during code implementation. A separately
+approved October19 Mac run subsequently renewed the existing session once and
+passed all four bounded requests through the actual local Worker/signed runner.
+Curated evidence is in `services/model-runner/LIVE-RESULTS.md`; that four-request
+budget is consumed. The prepared activation bundle in `ops/spark-live/README.md`
+has not been executed and authorizes no further inference. Hosted eligibility
+remains a documented qualification, not a proved prohibition or implementation
+blocker.

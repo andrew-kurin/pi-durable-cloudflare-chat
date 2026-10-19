@@ -52,3 +52,7 @@ credentials/
 
 # Generated private deployment configuration
 .deploy.wrangler.json
+
+# Python operations helpers
+__pycache__/
+*.py[cod]
