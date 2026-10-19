@@ -1,6 +1,7 @@
 import { MAX_REQUEST_BYTES, type RoundJournal } from './core';
 import { RUNNER_PATH, sha256, siwcPayload, verifyRound } from '../../src/model-runner-protocol';
 import { validatedStream } from './live-stream';
+import { diagnosticText, emitDiagnostic, providerError, type Diagnostic } from './diagnostics';
 export class RunnerFailure extends Error { constructor(readonly code: string) { super(code); } }
 export interface LiveRunnerOptions {
   key: CryptoKey;
@@ -10,6 +11,7 @@ export interface LiveRunnerOptions {
   fetch: typeof fetch;
   timeoutMs?: number;
   now?: () => number;
+  diagnostic?: Diagnostic;
 }
 const failure = (status: number, code: string) => Response.json({ error: { code, message: code } }, { status, headers: { 'cache-control': 'no-store' } });
 export async function interrupted<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -27,6 +29,8 @@ export function createSiwcRunner(options: LiveRunnerOptions) {
   if (request.method !== 'POST' || url.pathname !== RUNNER_PATH || url.search) return failure(404, 'not_found');
   const controller = new AbortController(), abort = () => controller.abort();
   request.signal.addEventListener('abort', abort, { once: true }); if (request.signal.aborted) abort();
+  let roundId: string | undefined, stage='request';
+  const log=(record:Record<string,unknown>)=>emitDiagnostic(options.diagnostic,{event:'pi_runner',roundId,stage,...record});
   const timer = setTimeout(abort, options.timeoutMs ?? 120000);
   const finish = () => { clearTimeout(timer); request.signal.removeEventListener('abort', abort); };
   try {
@@ -41,24 +45,36 @@ export function createSiwcRunner(options: LiveRunnerOptions) {
     try { const input = JSON.parse(raw); if (input.store !== false || input.stream !== true) throw Error(); payload = siwcPayload(input); }
     catch { finish(); return failure(400, 'unsupported_siwc_request'); }
     controller.signal.throwIfAborted();
-    const id = request.headers.get('x-pi-round-id')!, reserved = await options.journal.reserve(id, await sha256(raw));
+    const id = request.headers.get('x-pi-round-id')!; roundId=id; stage='reservation'; log({outcome:'authenticated',model:payload.model});
+    const reserved = await options.journal.reserve(id, await sha256(raw));
     if (reserved !== 'new') { finish(); return failure(409, reserved === 'conflict' ? 'round_conflict' : 'round_already_reserved'); }
     // Permanent fence precedes refresh and inference. No automatic replay ever.
     controller.signal.throwIfAborted();
+    stage='credentials';
     const access = await interrupted(options.credentials.access(), controller.signal);
     controller.signal.throwIfAborted();
+    stage='provider';log({outcome:'dispatch'});
     const pending = options.fetch('https://api.openai.com/v1/responses', { method: 'POST', redirect: 'error', signal: controller.signal,
       headers: { authorization: `Bearer ${access}`, 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(payload) });
     void pending.then(r => { if (controller.signal.aborted) void r.body?.cancel().catch(() => {}); }, () => {});
     const response = await interrupted(pending, controller.signal);
+    log({outcome:'response',httpStatus:response.status,requestId:diagnosticText(response.headers.get('x-request-id')),contentType:diagnosticText(response.headers.get('content-type'))});
     const media = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
     if (!response.ok || !response.body || (media && media !== 'text/event-stream')) {
-      void response.body?.cancel().catch(() => {}); finish();
+      // Only bounded technical error fields; never log an inference success body.
+      if (!response.ok && response.body) {
+        const reader=response.body.getReader();let text='',size=0;
+        try { while(size<=8192) {const p=await interrupted(reader.read(),controller.signal);if(p.done)break;size+=p.value.length;if(size>8192)break;text+=new TextDecoder().decode(p.value);}if(size<=8192){const parsed=JSON.parse(text);log({outcome:'provider_error',httpStatus:response.status,error:providerError(parsed.error)});} }
+        catch { log({outcome:'provider_error_unavailable',httpStatus:response.status}); }
+        finally { void reader.cancel().catch(()=>{}); }
+      } else void response.body?.cancel().catch(() => {}); finish();
       const code = response.status === 401 ? 'siwc_reauthorization_required' : response.status === 403 ? 'siwc_access_denied' : response.status === 429 ? 'siwc_usage_limited' : 'siwc_provider_rejected';
       return failure(502, code);
     }
-    return new Response(validatedStream(response.body, controller.signal, finish, abort), { headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-pi-round-id': id } });
+    stage='stream';
+    return new Response(validatedStream(response.body, controller.signal, finish, abort,log), { headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-pi-round-id': id } });
   } catch (error) {
+    log({outcome:'failure',code:error instanceof RunnerFailure?error.code:'siwc_round_interrupted',message:diagnosticText(error instanceof Error?error.message:undefined),aborted:controller.signal.aborted});
     abort(); finish();
     return failure(502, error instanceof RunnerFailure ? error.code : 'siwc_round_interrupted');
   }

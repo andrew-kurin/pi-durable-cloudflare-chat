@@ -94,3 +94,33 @@ test('Worker-compatible manual redirect mode rejects every redirect without forw
  let calls=0,canceled=0;const p=createSiwcRunnerProvider({endpoint:'https://runner.example/v1/responses',key,roundId:'redirect-fixture',fetch:async input=>{calls++;assert.equal((input as Request).redirect,'manual');return new Response(new ReadableStream({cancel(){canceled++;}}),{status:307,headers:{location:'https://other.example/steal'}});}});
  const result=(await collect(p.streamSimple(p.getModels()[0],{messages:[{role:'user',content:'fixture',timestamp:1}]}))).result;assert.equal(result.stopReason,'error');assert.equal(isRetryableAssistantError(result),false);assert.match(result.errorMessage,/redirect rejected/);assert.equal(calls,1);assert.equal(canceled,1);
 });
+test('private diagnostics preserve provider status/code/message and IDs without credentials or request content',async()=>{
+ const records:Record<string,unknown>[]=[];
+ const f=fixture({diagnostic:r=>records.push(r),fetch:async()=>Response.json({error:{code:'invalid_request_error',type:'invalid_request_error',param:'input[2].call_id',message:'No tool call found for call_id call_exact; Authorization: Bearer sk-private-token-value',input:'PRIVATE-PROMPT'}},{status:400,headers:{'x-request-id':'req_exact'}})});
+ const r=await f.runner(await request('diagnostic-round-1'));assert.equal(r.status,502);
+ const response=records.find(r=>r.outcome==='response')!;assert.equal(response.httpStatus,400);assert.equal(response.requestId,'req_exact');assert.equal(response.roundId,'diagnostic-round-1');
+ const failure=records.find(r=>r.outcome==='provider_error')!;assert.deepEqual(failure.error,{code:'invalid_request_error',type:'invalid_request_error',param:'input[2].call_id',message:'No tool call found for call_id call_exact; Authorization: [redacted]'});
+ const text=JSON.stringify(records);assert.ok(!text.includes('sk-private-token-value'));assert.ok(!text.includes('PRIVATE-PROMPT'));assert.ok(!text.includes('SYNTHETIC-ACCESS'));assert.ok(!text.includes('fixture'));
+ assert.equal((await f.runner(await request('diagnostic-round-1'))).status,409);
+});
+test('stream diagnostics distinguish missing completion from provider SSE errors without output frames',async()=>{
+ for(const mode of ['missing','failed']) {
+  const records:Record<string,unknown>[]=[];const f=fixture({diagnostic:r=>records.push(r),fetch:async()=>new Response(new TextEncoder().encode('data: '+JSON.stringify(mode==='missing'?{type:'response.created',response:{output:'PRIVATE-OUTPUT'}}:{type:'response.failed',response:{error:{code:'server_error',message:'upstream service unavailable'}}})+'\n\n'))});
+  const response=await f.runner(await request('stream-diagnostic-'+mode));await assert.rejects(response.text());
+  const failure=records.find(r=>r.outcome==='stream_interrupted')!;assert.equal(failure.message,mode==='missing'?'missing_completion':'provider_stream_failed');assert.equal(failure.lastEvent,mode==='missing'?'response.created':'response.failed');assert.ok(!JSON.stringify(records).includes('PRIVATE-OUTPUT'));
+  if(mode==='failed')assert.deepEqual(records.find(r=>r.outcome==='provider_stream_error')!.error,{code:'server_error',message:'upstream service unavailable'});
+ }
+});
+test('native HTTP stream failure after 200 is a nonretryable client interruption, with exact private reason',async()=>{
+ for(const mode of ['truncated','provider-failed']) {
+  const diagnostics:Record<string,unknown>[]=[];let dispatches=0,status:number|undefined;
+  const f=fixture({diagnostic:r=>diagnostics.push(r),fetch:async()=>{dispatches++;return new Response(new ReadableStream<Uint8Array>({start(out){out.enqueue(new TextEncoder().encode('data: {"type":"response.created","response":{"id":"resp_native"}}\n\n'));setTimeout(()=>{if(mode==='provider-failed')out.enqueue(new TextEncoder().encode('data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"fixed upstream failure"}}}\n\n'));out.close();},5);}}));}});
+  const server=createRunnerServer(f.runner);server.listen(0,'127.0.0.1');await once(server,'listening');const port=(server.address() as import('node:net').AddressInfo).port;
+  try {
+   const p=createSiwcRunnerProvider({endpoint:'https://runner.example/v1/responses',key,roundId:'native-failure-'+mode,fetch:async input=>{const q=input as Request;const r=await fetch('http://127.0.0.1:'+port+'/v1/responses',{method:'POST',body:await q.text(),headers:q.headers,signal:q.signal});status=r.status;return r;}});
+   const result=await collect(p.streamSimple(p.getModels()[0],{messages:[{role:'user',content:'synthetic',timestamp:1}]},{maxRetries:9}));
+   assert.equal(status,200);assert.equal(result.result.stopReason,'error');assert.match(result.result.errorMessage,/runner transport interrupted/);assert.equal(isRetryableAssistantError(result.result),false);assert.equal(dispatches,1);assert.equal(f.journal.rounds.size,1);
+   assert.equal(diagnostics.find(r=>r.outcome==='stream_interrupted')!.message,mode==='truncated'?'missing_completion':'provider_stream_failed');
+  }finally{server.closeAllConnections();await new Promise<void>(ok=>server.close(()=>ok()));}
+ }
+});

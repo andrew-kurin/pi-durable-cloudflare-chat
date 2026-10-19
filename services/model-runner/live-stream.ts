@@ -1,8 +1,10 @@
+import { diagnosticText, providerError, type Diagnostic } from './diagnostics';
 /** Bounded incremental SSE validation. Never stores/logs prompt/output frames.
  * Headerless and mixed-case SSE are accepted, but a terminal completion is mandatory. */
-export function validatedStream(body: ReadableStream<Uint8Array>, signal: AbortSignal, finish: () => void, abort: () => void) {
+export function validatedStream(body: ReadableStream<Uint8Array>, signal: AbortSignal, finish: () => void, abort: () => void, diagnostic?: Diagnostic) {
   const reader = body.getReader(), decoder = new TextDecoder('utf-8', { fatal: true });
-  let buffer = '', bytes = 0, terminal = false, ended = false;
+  let buffer = '', bytes = 0, terminal = false, ended = false, lastEvent: string | undefined;
+  const log=(record:Record<string,unknown>)=>{try{diagnostic?.(record);}catch{}};
   const stop = () => { void reader.cancel().catch(() => {}); };
   signal.addEventListener('abort', stop, { once: true });
   const cleanup = () => { if (!ended) { ended = true; signal.removeEventListener('abort', stop); finish(); } };
@@ -19,7 +21,8 @@ export function validatedStream(body: ReadableStream<Uint8Array>, signal: AbortS
       if (terminal) throw Error('after_completion');
       const event = JSON.parse(data);
       if (typeof event.type !== 'string' || !event.type.startsWith('response.')) throw Error('invalid_stream');
-      if (['response.failed', 'response.incomplete'].includes(event.type)) throw Error('provider_stream_failed');
+      lastEvent=/^response\.[a-z0-9_.]{1,100}$/.test(event.type)?event.type:'unrecognized_response_event';
+      if (['response.failed', 'response.incomplete'].includes(event.type)) {log({outcome:'provider_stream_error',eventType:event.type,error:providerError(event.response?.error),incompleteReason:diagnosticText(event.response?.incomplete_details?.reason)});throw Error('provider_stream_failed');}
       if (event.type === 'response.completed') {
         if (event.response?.status !== 'completed') throw Error('invalid_completion');
         terminal = true;
@@ -31,11 +34,11 @@ export function validatedStream(body: ReadableStream<Uint8Array>, signal: AbortS
     async pull(output) {
       try {
         signal.throwIfAborted(); const part = await reader.read(); signal.throwIfAborted();
-        if (part.done) { validate(decoder.decode()); if (!terminal || buffer.trim()) throw Error('missing_completion'); cleanup(); output.close(); return; }
+        if (part.done) { validate(decoder.decode()); if (!terminal || buffer.trim()) throw Error('missing_completion'); log({outcome:'completed',bytes,lastEvent}); cleanup(); output.close(); return; }
         bytes += part.value.length; if (bytes > 4194304) throw Error('stream_receive_limit');
         validate(decoder.decode(part.value, { stream: true })); output.enqueue(part.value);
-      } catch { abort(); cleanup(); output.error(Error('Model stream interrupted; automatic replay disabled.')); }
+      } catch (error) { log({outcome:'stream_interrupted',bytes,lastEvent,terminal,aborted:signal.aborted,message:diagnosticText(error instanceof Error?error.message:undefined)});abort(); cleanup(); output.error(Error('Model stream interrupted; automatic replay disabled.')); }
     },
-    async cancel() { abort(); cleanup(); await reader.cancel().catch(() => {}); },
+    async cancel() { log({outcome:'cancelled',bytes,lastEvent,terminal});abort(); cleanup(); await reader.cancel().catch(() => {}); },
   });
 }
