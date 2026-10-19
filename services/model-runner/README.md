@@ -51,3 +51,9 @@ This emits a fake `test_status` call. No tool runs on the service. Repeating tha
 Offline tests prove the boundary and fail-closed behavior with fake credentials/inference, not live eligibility, OAuth security, network availability, upstream cancellation confirmation or production recovery.
 
 A separate [local SIWC compatibility check](LOCAL-SIWC.md) has passed explicitly approved Mac tests for Sol text, a Sol fixed-tool continuation and Luna text. See the curated [results](LIVE-RESULTS.md). Its default command remains inert. This diagnostic does not turn the fake service into a live runner. The [Spark preparation runbook](deploy/spark/README.md) describes the uninstalled service template and remaining gates.
+
+### Request size
+
+The Worker, Node HTTP bridge and runner parsers share a 16 MiB serialized-request memory guard (`MAX_REQUEST_BYTES` in `src/model-runner-protocol.ts`). This replaces the prototype 128 KiB cap that rejected a 180,013-byte saved conversation before dispatch. Requests at the limit are accepted; larger requests are rejected before inference. No history is truncated. This guard is not an OpenAI token or context limit; the provider enforces those separately.
+
+The [documented SIWC inference endpoint](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) is `https://api.openai.com/v1/responses`. [Model context limits](https://developers.openai.com/api/docs/models/gpt-6.1-sol) are expressed in tokens, not equivalent JSON bytes. No general 128 KiB Responses request-body limit is documented there. A finite transport guard remains because this path buffers requests and [Cloudflare Worker isolates have finite memory](https://developers.cloudflare.com/workers/platform/limits/#memory).

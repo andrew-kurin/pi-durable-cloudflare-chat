@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isRetryableAssistantError } from '@earendil-works/pi-ai/utils/retry';
 import { Type, type Message } from '@earendil-works/pi-ai';
-import { createOfflineRunner, MemoryRoundJournal, serializedCredentials, type OfflineRunnerOptions } from '../services/model-runner/core';
+import { MAX_REQUEST_BYTES, createOfflineRunner, MemoryRoundJournal, serializedCredentials, type OfflineRunnerOptions } from '../services/model-runner/core';
 import { fileRoundJournal } from '../services/model-runner/journal';
 import { fakeBackend } from '../services/model-runner/fake-backend';
 import { createOfflineRunnerProvider } from '../src/model-runner-client';
@@ -101,7 +101,7 @@ test('failed refresh leaves rounds fenced; a later distinct round may explicitly
  assert.equal((await f.runner(request())).status, 502); assert.equal(refreshes, 2);
 });
 test('invalid envelopes, wrong endpoints and oversized requests do not consume provider work', async () => {
- const f = fixture(); for (const body of [null, [], { ...payload, model: 'arbitrary' }, { ...payload, stream: false }, { ...payload, store: true }, { ...payload, input: ['x'.repeat(140000)] }]) assert.equal((await f.runner(request(crypto.randomUUID(), body))).status, 400);
+ const f = fixture(); for (const body of [null, [], { ...payload, model: 'arbitrary' }, { ...payload, stream: false }, { ...payload, store: true }, { ...payload, input: ['x'.repeat(MAX_REQUEST_BYTES)] }]) assert.equal((await f.runner(request(crypto.randomUUID(), body))).status, 400);
  assert.equal((await f.runner(new Request('http://model-runner.invalid/elsewhere'))).status, 404);
  const denied = request(); denied.headers.delete('x-pi-prototype'); assert.equal((await f.runner(denied)).status, 403); assert.equal(f.calls.length, 0);
 });
