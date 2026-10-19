@@ -7,7 +7,7 @@ import { createSiwcRunner, type LiveRunnerOptions } from '../services/model-runn
 import { fakeBackend } from '../services/model-runner/fake-backend';
 import { MemoryRoundJournal } from '../services/model-runner/core';
 import { createRunnerServer } from '../services/model-runner/http';
-import { transportKey, signRound, siwcPayload } from '../src/model-runner-protocol';
+import { MAX_REQUEST_BYTES, transportKey, signRound, siwcPayload } from '../src/model-runner-protocol';
 import { createSiwcRunnerProvider } from '../src/model-runner-siwc-client';
 import { createChatModels } from '../src/provider-sessions';
 const key = await transportKey(new Uint8Array(32).fill(7)); // synthetic fixture only
@@ -141,8 +141,8 @@ test('Cloudflare1010 is classified distinctly and never retried',async()=>{
 test('oversized history is a local size failure before transport with no prompt in diagnostics',async(t)=>{
  const records:string[]=[];t.mock.method(console,'warn',(s:string)=>records.push(s));let calls=0;
  const p=createSiwcRunnerProvider({endpoint:'https://runner.example/v1/responses',key,roundId:'large-local-history',fetch:async()=>{calls++;throw Error('No request permitted');}});
- const result=await collect(p.streamSimple(p.getModels()[0],{messages:[{role:'user',content:'PRIVATE-PROMPT-'+ 'x'.repeat(140000),timestamp:1}]},{maxRetries:9}));
- assert.equal(result.result.stopReason,'error');assert.match(result.result.errorMessage,/runner input limit/);assert.equal(isRetryableAssistantError(result.result),false);assert.equal(calls,0);assert.equal(records.length,1);const record=JSON.parse(records[0]);assert.equal(record.code,'runner_input_limit');assert.ok(record.bodyBytes>131072);assert.equal(record.httpStatus,undefined);assert.ok(!records.join('').includes('PRIVATE-PROMPT'));
+ const result=await collect(p.streamSimple(p.getModels()[0],{messages:[{role:'user',content:'PRIVATE-PROMPT-'+ 'x'.repeat(MAX_REQUEST_BYTES),timestamp:1}]},{maxRetries:9}));
+ assert.equal(result.result.stopReason,'error');assert.match(result.result.errorMessage,/runner input limit/);assert.equal(isRetryableAssistantError(result.result),false);assert.equal(calls,0);assert.equal(records.length,1);const record=JSON.parse(records[0]);assert.equal(record.code,'runner_input_limit');assert.ok(record.bodyBytes>MAX_REQUEST_BYTES);assert.equal(record.httpStatus,undefined);assert.ok(!records.join('').includes('PRIVATE-PROMPT'));
 });
 test('network diagnostics retain the technical failure while excluding credentials and prompts',async(t)=>{
  const records:string[]=[];t.mock.method(console,'warn',(s:string)=>records.push(s));const p=createSiwcRunnerProvider({endpoint:'https://runner.example/v1/responses',key,roundId:'network-diagnostic-fixed',fetch:async()=>{throw Error('fetch failed ECONNRESET; Authorization: Bearer sk-SYNTHETICPRIVATE');}});

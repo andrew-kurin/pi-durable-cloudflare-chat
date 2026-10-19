@@ -1,6 +1,7 @@
 /** Offline service boundary. No OAuth, ambient credentials or external fetch. */
 export const PROTOTYPE_MODEL = 'gpt-6.1-sol';
-export const MAX_REQUEST_BYTES = 131072;
+import { MAX_REQUEST_BYTES } from '../../src/model-runner-protocol';
+export { MAX_REQUEST_BYTES };
 export interface RoundJournal { reserve(id: string, fingerprint: string): Promise<'new' | 'duplicate' | 'conflict'> }
 export class MemoryRoundJournal implements RoundJournal {
   readonly rounds = new Map<string, string>();

@@ -2,6 +2,8 @@
 export const RUNNER_MODELS = ['gpt-6.1-sol', 'gpt-6-luna'] as const;
 export const ROUND_ID = /^[a-zA-Z0-9_-]{8,80}$/;
 export const RUNNER_PATH = '/v1/responses';
+/** Transport memory guard, not a model token/context limit. Shared by Worker and Node. */
+export const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const encoder = new TextEncoder();
 export const sha256 = async (body: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(body)))].map(x => x.toString(16).padStart(2, '0')).join('');
 export async function transportKey(bytes: Uint8Array): Promise<CryptoKey> {

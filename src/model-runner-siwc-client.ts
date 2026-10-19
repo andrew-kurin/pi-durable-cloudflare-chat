@@ -5,7 +5,7 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/e
 import { appendAssistantMessageDiagnostic } from '@earendil-works/pi-ai/utils/diagnostics';
 import type { ProviderStreams } from '@earendil-works/pi-ai';
 import { technicalError } from './error-log';
-import { ROUND_ID, RUNNER_MODELS, RUNNER_PATH, signRound, siwcPayload } from './model-runner-protocol';
+import { MAX_REQUEST_BYTES, ROUND_ID, RUNNER_MODELS, RUNNER_PATH, signRound, siwcPayload } from './model-runner-protocol';
 /** Explicit per-round provider. Caller MUST durably reserve roundId before use,
  * restore the same ID after interruption, and create a distinct ID for tool continuation.
  * No environment defaults and no OpenAI credentials ever enter this Worker. */
@@ -21,7 +21,7 @@ export function createSiwcRunnerProvider(connection: { endpoint: string; key: Cr
         if (String(input) !== 'https://model-runner.invalid/v1/responses' || init?.method !== 'POST' || typeof init.body !== 'string') throw Error('Outside runner contract');
         const body = JSON.stringify(validate(JSON.parse(init.body)));
         bodyBytes=new TextEncoder().encode(body).length;
-        if (bodyBytes > 131072) { code='runner_input_limit';throw Error('Runner input limit'); }
+        if (bodyBytes > MAX_REQUEST_BYTES) { code='runner_input_limit';throw Error('Runner input limit'); }
         init.signal?.throwIfAborted();
         const reservation = await connection.beforeDispatch?.(body);
         if (reservation && reservation !== 'new') { code = reservation === 'conflict' ? 'worker_round_conflict' : 'worker_round_already_reserved'; throw Error('Worker round fenced'); }
