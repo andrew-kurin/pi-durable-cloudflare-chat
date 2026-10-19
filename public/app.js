@@ -25,7 +25,7 @@ const historyClient=createHistoryClient({onView:renderHistory,onState:({phase,lo
  else if(phase==='failed')$('activity').textContent='Saved history could not load. Retry history after the connection recovers.';
 }});
 $('history-retry').onclick=()=>{$('chat-info').open=false;void status().catch(()=>{});historyClient.retry();};
-function open(){if(!session){emptyChat();return;}$('prompt').disabled=false;$('chat-info').open=false;void status().catch(()=>{});const welcome=$('messages').querySelector('.welcome');if(welcome)welcome.hidden=true;const params=new URLSearchParams(location.search);historyClient.connect({sessionId:session,diagnostic:{kind:params.get('diagnostic'),capture:params.get('capture')}});}
+function open(){if(!session){emptyChat();return;}$('prompt').disabled=false;$('chat-info').open=false;void status().catch(()=>{});const welcome=$('messages').querySelector('.welcome');if(welcome)welcome.hidden=true;historyClient.connect({sessionId:session});}
 let chats=[],deletedChats=[],renameTarget,undo;
 const chatSession=createChatSession({api,requestedId:new URLSearchParams(location.search).get('session'),onChange:(state,change)=>{
  const previous=session;session=state.sessionId;chats=state.chats;submitting=state.submitting;
