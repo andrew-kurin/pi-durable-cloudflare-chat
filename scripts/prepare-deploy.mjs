@@ -34,7 +34,7 @@ if (workspaceEnabled === 'true' && workspaceProvisioned !== 'true') throw new Er
 const repository = process.env.WORKSPACE_REPOSITORY?.trim() || '';
 const image = process.env.WORKSPACE_IMAGE_REFERENCE?.trim() || '';
 if (webSearchEnabled === 'true' && webSearchTest === 'true') throw new Error('Disable search test mode before enabling normal web search');
-if (runnerEnabled === 'true' && (modelEnabled !== 'true' || loginEnabled === 'true' || grokEnabled === 'true')) throw new Error('Runner requires model use with other provider setup disabled');
+if (runnerEnabled === 'true' && (modelEnabled !== 'true' || loginEnabled === 'true')) throw new Error('Runner requires model use with subscription login disabled');
 if (modelEnabled === 'true' && loginEnabled === 'true') throw new Error('Disable subscription setup before enabling model use');
 
 const accountId = required('CLOUDFLARE_ACCOUNT_ID');
