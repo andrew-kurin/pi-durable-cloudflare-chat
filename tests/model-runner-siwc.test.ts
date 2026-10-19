@@ -144,3 +144,7 @@ test('oversized history is a local size failure before transport with no prompt 
  const result=await collect(p.streamSimple(p.getModels()[0],{messages:[{role:'user',content:'PRIVATE-PROMPT-'+ 'x'.repeat(140000),timestamp:1}]},{maxRetries:9}));
  assert.equal(result.result.stopReason,'error');assert.match(result.result.errorMessage,/runner input limit/);assert.equal(isRetryableAssistantError(result.result),false);assert.equal(calls,0);assert.equal(records.length,1);const record=JSON.parse(records[0]);assert.equal(record.code,'runner_input_limit');assert.ok(record.bodyBytes>131072);assert.equal(record.httpStatus,undefined);assert.ok(!records.join('').includes('PRIVATE-PROMPT'));
 });
+test('network diagnostics retain the technical failure while excluding credentials and prompts',async(t)=>{
+ const records:string[]=[];t.mock.method(console,'warn',(s:string)=>records.push(s));const p=createSiwcRunnerProvider({endpoint:'https://runner.example/v1/responses',key,roundId:'network-diagnostic-fixed',fetch:async()=>{throw Error('fetch failed ECONNRESET; Authorization: Bearer sk-SYNTHETICPRIVATE');}});
+ const result=await collect(p.streamSimple(p.getModels()[0],{messages:[{role:'user',content:'PRIVATE-PROMPT',timestamp:1}]}));assert.equal(result.result.stopReason,'error');assert.equal(records.length,1);const r=JSON.parse(records[0]);assert.match(r.transportError.message,/ECONNRESET/);assert.equal(r.cancelled,false);assert.ok(!records[0].includes('sk-SYNTHETICPRIVATE'));assert.ok(!records[0].includes('PRIVATE-PROMPT'));
+});
