@@ -1,0 +1,12 @@
+{
+  "config": {
+    "ingress": [
+      {
+        "hostname": "pi-runner.andrewkurin.com",
+        "path": "^/v1/responses$",
+        "service": "http://127.0.0.1:4320"
+      },
+      { "service": "http_status:404" }
+    ]
+  }
+}

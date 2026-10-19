@@ -7,14 +7,14 @@
     "test": "tests"
   },
   "scripts": {
-    "typecheck": "tsc",
+    "typecheck": "tsc && tsc -p services/model-runner",
     "test": "npm run check:ui && node --import tsx --test tests/*.test.ts",
     "build": "npm run build:ui && wrangler deploy --dry-run --outdir dist",
     "dev": "wrangler dev --local",
     "build:ui": "node scripts/build-ui.mjs",
     "check:ui": "node scripts/build-ui.mjs --check",
     "test:ui": "node --import tsx tests/ui.mjs",
-    "postinstall": "node scripts/patch-pi-retry.mjs"
+    "postinstall": "node scripts/patch-pi-retry.mjs && node scripts/patch-pi-runner-identity.mjs"
   },
   "keywords": [],
   "author": "",
