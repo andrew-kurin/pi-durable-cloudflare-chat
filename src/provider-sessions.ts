@@ -1,5 +1,4 @@
 import { runnerConfigured, type RunnerConfig } from "./model-runner-worker";
-import { openaiFailureReport, openaiCheckReports, runOpenAIChecks, OPENAI_CHECK_MODELS, OPENAI_CHECK_BUDGET } from "./openai-compat-check";
 import { createModels } from "@earendil-works/pi-ai/models";
 import type { Provider } from "@earendil-works/pi-ai/models";
 import type { CredentialStore, Models } from "@earendil-works/pi-ai";
@@ -108,19 +107,6 @@ export class ProviderSessions {
       throw new RequestError(503, "Grok access is disabled");
     if (!(await this.connected(model.provider)))
       throw new RequestError(503, "Connect your subscription first");
-  }
-  async openaiCheckStatus() {
-    return { connected: await this.connected("openai-codex"), loginEnabled: this.config.ENABLE_SUBSCRIPTION_LOGIN === "true", models: OPENAI_CHECK_MODELS, budget: OPENAI_CHECK_BUDGET, reports: await openaiCheckReports(this.storage), failureCaptureReport: await openaiFailureReport(this.storage) };
-  }
-  async runApprovedOpenAICheck(signal: AbortSignal, failureCapture = false) {
-    if (this.config.ENABLE_MODEL !== "true") throw new RequestError(403, "Model access is disabled");
-    const credentials = failureCapture ? { ...this.credentials, modify: async () => { throw Error("This diagnostic cannot refresh or change credentials"); } } : this.credentials;
-    const models = createModels({ credentials, authContext: { env: async () => undefined, fileExists: async () => false } });
-    models.setProvider(createWorkerCodexProvider());
-    const reports = await runOpenAIChecks(models, this.credentials, this.storage, { approved: true, signal, failureCapture });
-    this.storage.sql.exec("CREATE TABLE IF NOT EXISTS app_openai_check_results (id TEXT PRIMARY KEY, recorded_at INTEGER NOT NULL, result TEXT NOT NULL CHECK(json_valid(result)))");
-    for (const report of reports) if (report) this.storage.sql.exec("INSERT INTO app_openai_check_results (id,recorded_at,result) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET recorded_at=excluded.recorded_at,result=excluded.result", failureCapture ? "failure-v2:" + report.model : report.model, Date.now(), JSON.stringify(report));
-    return reports;
   }
   private checkModels() {
     const models = createModels({

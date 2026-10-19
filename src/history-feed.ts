@@ -2,11 +2,8 @@ import type { PiHarness } from "agents/harness/pi";
 import type { ChatCatalog } from "./chat-catalog";
 import { ChatProjection } from "./projector";
 import { conversationTitle } from "./conversation-title";
-import {
-  diagnoseSavedErrorRead,
-  logSavedFailure,
-  logTechnicalError,
-} from "./error-log";
+import { fullHistorySnapshot } from './history-snapshot';
+import { logTechnicalError } from './error-log';
 /** Owns history leases and close-before-open races, never model admission.
  * A lease releases exactly once on setup failure, cancellation, abort or expiry.
  */
@@ -15,19 +12,16 @@ export class HistoryFeed {
   private streamStops = new Map<string, () => Promise<void>>();
   private closedStreams = new Map<string, number>();
   constructor(
-    private harness: Pick<PiHarness, "session">,
-    private storage: DurableObjectStorage,
+    private harness: Pick<PiHarness, "session"|"conversation">,
     private chatCatalog: Pick<ChatCatalog, "title">,
   ) {}
   private frame(
     projection: ChatProjection,
     title: string | undefined,
-    diagnostic?: Awaited<ReturnType<typeof diagnoseSavedErrorRead>>,
   ) {
     return {
       ...projection.view(),
       historyProtocol: 2,
-      ...(diagnostic ? { diagnostic } : {}),
       title:
         title ||
         conversationTitle(
@@ -48,18 +42,9 @@ export class HistoryFeed {
     const events = await this.harness.session(sid).events();
     try {
       const projection = new ChatProjection();
-      projection.apply(events.snapshot);
-      const diagnostic =
-        url.searchParams.get("diagnostic") === "saved-error"
-          ? await diagnoseSavedErrorRead(
-              url,
-              events.snapshot.entries,
-              this.storage,
-              sid,
-            )
-          : undefined;
+      projection.apply(await fullHistorySnapshot(this.harness,sid,events.snapshot));
       const title = await this.chatCatalog.title(sid);
-      return Response.json(this.frame(projection, title, diagnostic), {
+      return Response.json(this.frame(projection, title), {
         headers: { "Cache-Control": "no-store" },
       });
     } finally {
@@ -120,16 +105,7 @@ export class HistoryFeed {
         return new Response(null, { status: 204 });
       }
       const projection = new ChatProjection();
-      projection.apply(events.snapshot);
-      const diagnostic =
-        url.searchParams.get("diagnostic") === "saved-error"
-          ? await diagnoseSavedErrorRead(
-              url,
-              events.snapshot.entries,
-              this.storage,
-              sid,
-            )
-          : undefined;
+      projection.apply(await fullHistorySnapshot(this.harness,sid,events.snapshot));
       const title = await this.chatCatalog.title(sid);
       if (ended) return new Response(null, { status: 204 });
       const encoder = new TextEncoder();
@@ -141,20 +117,13 @@ export class HistoryFeed {
             if (!ended)
               controller!.enqueue(
                 encoder.encode(
-                  `data: ${JSON.stringify(this.frame(projection, title, diagnostic))}\n\n`,
+                  `data: ${JSON.stringify(this.frame(projection, title))}\n\n`,
                 ),
               );
           };
           send();
           source.start(async (batch) => {
-            batch.forEach((e) => projection.apply(e));
-            const entries = batch.flatMap((e) =>
-              e.type === "message_end" || e.type === "entry_appended"
-                ? [e.entry]
-                : [],
-            );
-            if (entries.length)
-              await logSavedFailure(entries, this.storage, sid, "live-v1");
+            for(const event of batch)projection.apply(event.type==='snapshot'?await fullHistorySnapshot(this.harness,sid,event):event);
             send();
           });
           timer = setTimeout(() => {
@@ -169,9 +138,6 @@ export class HistoryFeed {
         headers: {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-store",
-          ...(diagnostic
-            ? { "X-Pi-Diagnostic-Outcome": diagnostic.outcome }
-            : {}),
         },
       });
     } catch (error) {

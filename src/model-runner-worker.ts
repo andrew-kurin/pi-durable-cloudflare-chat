@@ -1,3 +1,4 @@
+import {technicalError} from './error-log';
 import { createProvider } from '@earendil-works/pi-ai/models';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
@@ -8,6 +9,7 @@ export interface RunnerConfig {
  ENABLE_MODEL_RUNNER?: string;
  MODEL_RUNNER_ENDPOINT?: string;
  MODEL_RUNNER_TRANSPORT_KEY?: string;
+ WORKER_VERSION?: {id:string};
 }
 export function runnerConfigured(config: RunnerConfig) {
  if (config.ENABLE_MODEL_RUNNER !== 'true') return false;
@@ -57,6 +59,7 @@ export function createWorkerRunnerProvider(config: RunnerConfig, store: Store, n
     const id = await fence.identity(task, conversation), signingKey = await key;
     options?.signal?.throwIfAborted();
     const provider = createSiwcRunnerProvider({ endpoint: config.MODEL_RUNNER_ENDPOINT!, key: signingKey, roundId: id, fetch: fetcher,
+     telemetry:{workerVersion:config.WORKER_VERSION?.id,kind:headers.get('x-pi-task-kind')==='compaction'?'compaction':'generation',conversation},
      beforeDispatch: body => fence.reserve(id, body, task, conversation, options?.signal),
     });
     const selected = provider.getModels().find(m => m.id === model.id);
@@ -64,7 +67,8 @@ export function createWorkerRunnerProvider(config: RunnerConfig, store: Store, n
     const source = provider[method](selected, context, options);
     for await (const event of source) output.push(event);
     output.end(await source.result());
-   } catch {
+   } catch (cause) {
+    try { console.warn(JSON.stringify({event:'pi_error',stage:'worker_round_prepare',workerVersion:config.WORKER_VERSION?.id,...technicalError(cause)})); } catch {}
     const error: AssistantMessage = { role: 'assistant', content: [], api: model.api, provider: model.provider, model: model.id, stopReason: 'error', errorMessage: 'Durable model round unavailable; automatic replay disabled.', timestamp: Date.now(), usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
     output.push({ type: 'error', reason: 'error', error }); output.end(error);
    }

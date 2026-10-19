@@ -28,12 +28,9 @@ export function createHistoryClient({ onView, onState, platform = window }) {
     release();
     target = { ...next };
     suspended = false;
-    const diagnostic = next.diagnostic;
-    const suffix = diagnostic?.kind === 'saved-error' && /^[a-f0-9-]{36}$/.test(diagnostic.capture)
-      ? '&diagnostic=saved-error&capture=' + encodeURIComponent(diagnostic.capture) : '';
     const session = encodeURIComponent(next.sessionId);
     const lease = platform.crypto.randomUUID();
-    const source = new platform.EventSource('/api/events?session=' + session + '&stream=' + lease + suffix);
+    const source = new platform.EventSource('/api/events?session=' + session + '&stream=' + lease);
     const connection = { source, lease, loaded: false, pending: false, fallback: undefined };
     current = connection;
     state(connection, 'loading');
@@ -57,7 +54,7 @@ export function createHistoryClient({ onView, onState, platform = window }) {
       const abort = new AbortController();
       connection.fallback = abort;
       try {
-        const view = await snapshot('/api/events?session=' + session + '&snapshot=1' + suffix, abort);
+        const view = await snapshot('/api/events?session=' + session + '&snapshot=1', abort);
         if (!valid(connection) || connection.loaded) return;
         if (!view || !Array.isArray(view.messages)) throw Error("History unavailable");
         connection.loaded = true;

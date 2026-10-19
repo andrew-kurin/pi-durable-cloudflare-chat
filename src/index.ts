@@ -1,4 +1,5 @@
 import { createWorkerRunnerProvider, runnerConfigured, type RunnerConfig } from "./model-runner-worker";
+import { COMPACTION_POLICY,compactionLogs } from './compaction';
 import { CODEX_CHAT_MODEL } from "./chat-model";
 import { ProviderSessions, createChatModels } from "./provider-sessions";
 import { HistoryFeed } from "./history-feed";
@@ -92,6 +93,7 @@ export class Assistant extends DurableObject<Env> {
     harness: ({ storage, context }) => {
       const registry = createRegistry();
       registry.install(delegation());
+      registry.install(compactionLogs(this.env.WORKER_VERSION?.id));
       if (this.workspaceEnabled())
         registry.install(
           workspaceTools({
@@ -105,7 +107,7 @@ export class Assistant extends DurableObject<Env> {
           models: this.models,
           registry,
           settings: {
-            compaction: { enabled: false },
+            compaction: COMPACTION_POLICY,
             progress: { partialIntervalMs: 250, outputIntervalMs: 500 },
             retry: { enabled: true, maxRetries: 1, baseDelayMs: 1000 },
             stream: { transport: "sse", timeoutMs: 120000, maxRetries: 0 },
@@ -136,7 +138,6 @@ export class Assistant extends DurableObject<Env> {
   );
   private history = new HistoryFeed(
     this.harness,
-    this.ctx.storage,
     this.chatCatalog,
   );
   lifecycle = Lifecycle.install(this).use(this.harness);
@@ -190,16 +191,6 @@ export class Assistant extends DurableObject<Env> {
         path.startsWith("/api/workspaces")
       )
         await this.chatCatalog.requireActive(sid);
-      if (path === "/api/openai-check/status" && request.method === "GET")
-        return Response.json(await this.providers.openaiCheckStatus());
-      if (["/api/openai-check/run", "/api/openai-check/recheck"].includes(path) && request.method === "POST") {
-        const raw = await request.text();
-        if (raw.length > 100) throw new RequestError(400, "Approve the fixed check");
-        const body = jsonObject(raw);
-        if (Object.keys(body).length !== 1 || body.approved !== true) throw new RequestError(400, "Approve the fixed check");
-        if ((await this.harness.sessions.list()).some(s => s.busy)) throw new RequestError(409, "Wait for the current chat request to finish");
-        return Response.json(await this.providers.runApprovedOpenAICheck(request.signal, path === "/api/openai-check/recheck"));
-      }
       if (path.startsWith("/api/grok/")) {
         if (this.env.ENABLE_GROK_SUBSCRIPTION !== "true")
           return Response.json(

@@ -24,3 +24,23 @@ else {
  await writeFile(path, source.replace(original, patched));
  console.log('Applied Pi 1.1.0 durable runner identity patch');
 }
+// Compaction has its own durable task/checkpoint and needs the same no-replay boundary.
+const compactPath = new URL('dist/harness/compaction.js', root);
+const compactOriginal = `            const options = {
+                ...forwarded,
+                cacheRetention: "none",`;
+const compactPatched = `            const options = {
+                ...forwarded,
+                ...(ref.provider === "model-runner-siwc" ? { headers: {
+                    "x-pi-generation-task": String(runtime.taskId),
+                    "x-pi-conversation": String(runtime.conversationId),
+                    "x-pi-task-kind": "compaction",
+                } } : {}),
+                cacheRetention: "none",`;
+const compactSource = await readFile(compactPath, 'utf8');
+if (compactSource.includes(compactPatched)) console.log('Pi compaction identity patch already applied');
+else {
+ if (compactSource.split(compactOriginal).length !== 2) throw Error('Unexpected Pi compaction source; identity patch not applied');
+ await writeFile(compactPath, compactSource.replace(compactOriginal, compactPatched));
+ console.log('Applied Pi 1.1.0 compaction identity patch');
+}

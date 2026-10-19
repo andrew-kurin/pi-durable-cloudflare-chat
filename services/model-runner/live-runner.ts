@@ -1,3 +1,4 @@
+import {technicalError} from '../../src/error-log';
 import { MAX_REQUEST_BYTES, type RoundJournal } from './core';
 import { RUNNER_PATH, sha256, siwcPayload, verifyRound } from '../../src/model-runner-protocol';
 import { validatedStream } from './live-stream';
@@ -12,6 +13,7 @@ export interface LiveRunnerOptions {
   timeoutMs?: number;
   now?: () => number;
   diagnostic?: Diagnostic;
+  version?: string;
 }
 const failure = (status: number, code: string) => Response.json({ error: { code, message: code } }, { status, headers: { 'cache-control': 'no-store' } });
 export async function interrupted<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -29,25 +31,29 @@ export function createSiwcRunner(options: LiveRunnerOptions) {
   if (request.method !== 'POST' || url.pathname !== RUNNER_PATH || url.search) return failure(404, 'not_found');
   const controller = new AbortController(), abort = () => controller.abort();
   request.signal.addEventListener('abort', abort, { once: true }); if (request.signal.aborted) abort();
-  let roundId: string | undefined, stage='request';
-  const log=(record:Record<string,unknown>)=>emitDiagnostic(options.diagnostic,{event:'pi_runner',roundId,stage,...record});
+  const reportedRound=request.headers.get('x-pi-round-id')??'';
+  let roundId: string | undefined=/^[a-zA-Z0-9_-]{8,80}$/.test(reportedRound)?reportedRound:undefined, stage='request';const started=Date.now();let bodyBytes=0;
+  const workerVersion=request.headers.get('x-pi-worker-version')??undefined;
+  const kind=request.headers.get('x-pi-task-kind')==='compaction'?'compaction':'generation';
+  const log=(record:Record<string,unknown>)=>emitDiagnostic(options.diagnostic,{event:'pi_runner',roundId,stage,kind,runnerVersion:options.version,workerVersion:workerVersion&&/^[a-f0-9-]{36}$/.test(workerVersion)?workerVersion:undefined,bodyBytes,durationMs:Date.now()-started,...record});
   const timer = setTimeout(abort, options.timeoutMs ?? 120000);
   const finish = () => { clearTimeout(timer); request.signal.removeEventListener('abort', abort); };
   try {
     const reader = request.body?.getReader(); if (!reader) throw new RunnerFailure('invalid_body');
     const chunks: Uint8Array[] = []; let bytes = 0;
-    try { while (true) { const p = await interrupted(reader.read(), controller.signal); if (p.done) break; bytes += p.value.length; if (bytes > MAX_REQUEST_BYTES) throw new RunnerFailure('invalid_body'); chunks.push(p.value); } }
+    try { while (true) { const p = await interrupted(reader.read(), controller.signal); if (p.done) break; bytes += p.value.length; bodyBytes=bytes; if (bytes > MAX_REQUEST_BYTES) throw new RunnerFailure('invalid_body'); chunks.push(p.value); } }
     finally { void reader.cancel().catch(() => {}); }
+    bodyBytes=bytes;
     const all = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { all.set(chunk, offset); offset += chunk.length; }
     const raw = new TextDecoder('utf-8', { fatal: true }).decode(all);
-    if (!await verifyRound(options.key, request, raw, options.now?.())) { finish(); return failure(403, 'transport_auth_failed'); }
+    if (!await verifyRound(options.key, request, raw, options.now?.())) { log({outcome:'rejected',httpStatus:403,code:'transport_auth_failed'});finish(); return failure(403, 'transport_auth_failed'); }
     let payload: Record<string, unknown>;
     try { const input = JSON.parse(raw); if (input.store !== false || input.stream !== true) throw Error(); payload = siwcPayload(input); }
-    catch { finish(); return failure(400, 'unsupported_siwc_request'); }
+    catch { log({outcome:'rejected',httpStatus:400,code:'unsupported_siwc_request'});finish(); return failure(400, 'unsupported_siwc_request'); }
     controller.signal.throwIfAborted();
     const id = request.headers.get('x-pi-round-id')!; roundId=id; stage='reservation'; log({outcome:'authenticated',model:payload.model});
     const reserved = await options.journal.reserve(id, await sha256(raw));
-    if (reserved !== 'new') { finish(); return failure(409, reserved === 'conflict' ? 'round_conflict' : 'round_already_reserved'); }
+    if (reserved !== 'new') { log({outcome:'rejected',httpStatus:409,code:reserved==='conflict'?'round_conflict':'round_already_reserved'});finish(); return failure(409, reserved === 'conflict' ? 'round_conflict' : 'round_already_reserved'); }
     // Permanent fence precedes refresh and inference. No automatic replay ever.
     controller.signal.throwIfAborted();
     stage='credentials';
@@ -64,7 +70,7 @@ export function createSiwcRunner(options: LiveRunnerOptions) {
       // Only bounded technical error fields; never log an inference success body.
       if (!response.ok && response.body) {
         const reader=response.body.getReader();let text='',size=0;
-        try { while(size<=8192) {const p=await interrupted(reader.read(),controller.signal);if(p.done)break;size+=p.value.length;if(size>8192)break;text+=new TextDecoder().decode(p.value);}if(size<=8192){const parsed=JSON.parse(text);log({outcome:'provider_error',httpStatus:response.status,error:providerError(parsed.error)});} }
+        try { while(size<=8192) {const p=await interrupted(reader.read(),controller.signal);if(p.done)break;size+=p.value.length;if(size>8192)break;text+=new TextDecoder().decode(p.value);}if(size<=8192){try{const parsed=JSON.parse(text);log({outcome:'provider_error',httpStatus:response.status,error:providerError(parsed.error)});}catch{log({outcome:'provider_error',httpStatus:response.status,errorBody:diagnosticText(text)});}} }
         catch { log({outcome:'provider_error_unavailable',httpStatus:response.status}); }
         finally { void reader.cancel().catch(()=>{}); }
       } else void response.body?.cancel().catch(() => {}); finish();
@@ -74,7 +80,7 @@ export function createSiwcRunner(options: LiveRunnerOptions) {
     stage='stream';
     return new Response(validatedStream(response.body, controller.signal, finish, abort,log), { headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-pi-round-id': id } });
   } catch (error) {
-    log({outcome:'failure',code:error instanceof RunnerFailure?error.code:'siwc_round_interrupted',message:diagnosticText(error instanceof Error?error.message:undefined),aborted:controller.signal.aborted});
+    log({outcome:'failure',code:error instanceof RunnerFailure?error.code:'siwc_round_interrupted',message:diagnosticText(error instanceof Error?error.message:undefined),error:technicalError(error),aborted:controller.signal.aborted});
     abort(); finish();
     return failure(502, error instanceof RunnerFailure ? error.code : 'siwc_round_interrupted');
   }

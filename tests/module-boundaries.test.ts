@@ -73,7 +73,6 @@ test("history setup failures release leases and close-before-open avoids subscri
         },
       }),
     } as any,
-    store() as any,
     { title: async () => undefined },
   );
   for (let i = 0; i < 5; i++)

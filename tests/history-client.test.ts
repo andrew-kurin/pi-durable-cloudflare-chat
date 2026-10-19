@@ -127,16 +127,16 @@ test('close is idempotent; pagehide releases once, BFCache restores once, explic
   f.page('pagehide'); f.page('pageshow');
   assert.equal(f.sources.length, 2); assert.equal(f.closes.length, 2);
 });
-test('retry replaces only the active lease, carries validated diagnostics and leaves native reconnect on that source', async () => {
+test('retry replaces only the active lease and leaves native reconnect on that source', async () => {
   const f = fixture(undefined, true);
   f.client.connect({ sessionId: '1', diagnostic: { kind: 'saved-error', capture: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa' } });
-  assert.match(f.sources[0].url, /diagnostic=saved-error&capture=/);
+  assert.doesNotMatch(f.sources[0].url, /diagnostic=|capture=/);
   f.emit(f.sources[0], view('saved'));
   await f.sources[0].onerror(); f.sources[0].onopen();
   assert.equal(f.sources.length, 1); assert.equal(f.requests.length, 0);
   f.client.retry();
   assert.equal(f.sources.length, 2); assert.equal(f.closes.length, 1);
-  assert.match(f.sources[1].url, /diagnostic=saved-error&capture=/);
+  assert.doesNotMatch(f.sources[1].url, /diagnostic=|capture=/);
   f.client.close();
 });
 test('malformed live frames are ignored; a valid legacy view disables protocol-2 close notification', async () => {

@@ -1,9 +1,10 @@
 /** Prepared entrypoint only. No default config, OAuth flow or public listener.
  * Must be started separately from the approved fake service after activation review. */
+import {execFileSync} from 'node:child_process';
 import { isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRemoteJWKSet } from 'jose';
-import { transportKey } from '../../src/model-runner-protocol';
+import { MAX_REQUEST_BYTES, transportKey } from '../../src/model-runner-protocol';
 import { createRunnerServer } from './http';
 import { fileRoundJournal } from './journal';
 import { createSiwcRunner } from './live-runner';
@@ -28,9 +29,11 @@ export async function startLiveServer(configPath: string) {
     const journalPath = join(c.stateDirectory, 'rounds.jsonl');
     try { await readProtected(journalPath, 2000000); } catch (e: any) { if (e.code !== 'ENOENT') throw e; }
     journal = await fileRoundJournal(journalPath);
-    const server = createRunnerServer(createSiwcRunner({ key, journal, credentials: owner, fetch: globalThis.fetch, diagnostic: record=>console.info(JSON.stringify(record)) }));
+    let version:string|undefined;try{const sha=execFileSync('git',['-C',checkout,'rev-parse','HEAD'],{encoding:'utf8',timeout:2000}).trim();if(/^[a-f0-9]{40}$/.test(sha))version=sha;}catch{}
+    const server = createRunnerServer(createSiwcRunner({ key, journal, version, credentials: owner, fetch: globalThis.fetch, diagnostic: record=>console.info(JSON.stringify(record)) }));
     server.headersTimeout = 10000; server.requestTimeout = 15000;
     await new Promise<void>((ok, fail) => { server.once('error', fail); server.listen(c.port, '127.0.0.1', () => { server.off('error', fail); ok(); }); });
+    console.info(JSON.stringify({event:'pi_runner_service',phase:'started',runnerVersion:version,maxRequestBytes:MAX_REQUEST_BYTES}));
     let stopped = false;
     return { server, async close() { if (stopped) return; stopped = true; server.closeAllConnections(); await new Promise<void>(ok => server.close(() => ok())); await journal!.close(); await owner.close(); } };
   } catch (error) { await journal?.close(); await owner.close(); throw error; }
