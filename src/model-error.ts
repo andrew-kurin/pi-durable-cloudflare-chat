@@ -12,6 +12,14 @@ export interface SavedFailure {
 export function modelErrorInfo(raw: unknown): ModelErrorInfo {
   if (typeof raw !== "string" || raw.length > 65536)
     return { category: "unclassified saved model error" };
+  if (raw === "Model round failed (runner gateway browser integrity blocked); automatic replay disabled.")
+    return { category: "runner gateway browser integrity check", httpStatus: "403", code: "cloudflare_1010" };
+  if (raw === "Model round failed (runner input limit); automatic replay disabled.")
+    return { category: "runner input size limit", code: "runner_input_limit" };
+  if (raw === "Model round failed (unsupported siwc request); automatic replay disabled.")
+    return { category: "runner request protocol", code: "unsupported_siwc_request" };
+  if (raw === "Model round failed (runner stream interrupted); automatic replay disabled.")
+    return { category: "response stream protocol", code: "runner_stream_interrupted" };
   const status = raw.match(
     /^(?:[A-Za-z][A-Za-z ]{0,40} \()?([45]\d\d)\)?(?:\s*:|\s+status code\b)/,
   )?.[1];

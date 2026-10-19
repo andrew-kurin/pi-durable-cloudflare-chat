@@ -119,8 +119,28 @@ test('native HTTP stream failure after 200 is a nonretryable client interruption
   try {
    const p=createSiwcRunnerProvider({endpoint:'https://runner.example/v1/responses',key,roundId:'native-failure-'+mode,fetch:async input=>{const q=input as Request;const r=await fetch('http://127.0.0.1:'+port+'/v1/responses',{method:'POST',body:await q.text(),headers:q.headers,signal:q.signal});status=r.status;return r;}});
    const result=await collect(p.streamSimple(p.getModels()[0],{messages:[{role:'user',content:'synthetic',timestamp:1}]},{maxRetries:9}));
-   assert.equal(status,200);assert.equal(result.result.stopReason,'error');assert.match(result.result.errorMessage,/runner transport interrupted/);assert.equal(isRetryableAssistantError(result.result),false);assert.equal(dispatches,1);assert.equal(f.journal.rounds.size,1);
+   assert.equal(status,200);assert.equal(result.result.stopReason,'error');assert.match(result.result.errorMessage,/runner (?:transport|stream) interrupted/);assert.equal(isRetryableAssistantError(result.result),false);assert.equal(dispatches,1);assert.equal(f.journal.rounds.size,1);
    assert.equal(diagnostics.find(r=>r.outcome==='stream_interrupted')!.message,mode==='truncated'?'missing_completion':'provider_stream_failed');
   }finally{server.closeAllConnections();await new Promise<void>(ok=>server.close(()=>ok()));}
  }
+});
+
+test('fixed honest user agent reaches the runner through a browser-integrity gateway without forwarding caller headers',async()=>{
+ const f=fixture();let gatewayRequests=0,blocked=0;
+ const gateway=async(input:Request)=>{gatewayRequests++;if(input.headers.get('user-agent')!=='Pi-Durable-Model-Runner/1.0'){blocked++;return new Response('error code: 1010\n',{status:403});}assert.equal(input.headers.has('authorization'),false);assert.equal(input.headers.has('cookie'),false);return f.runner(input);};
+ const unsigned=await gateway(new Request('https://runner.example/v1/responses',{method:'POST',body:'{}'}));assert.equal(unsigned.status,403);assert.equal(await unsigned.text(),'error code: 1010\n');
+ const p=createSiwcRunnerProvider({endpoint:'https://runner.example/v1/responses',key,roundId:'browser-integrity-fixed',fetch:async input=>gateway(input as Request)});
+ const result=await collect(p.streamSimple(p.getModels()[0],{messages:[{role:'user',content:'synthetic',timestamp:1}]},{headers:{'user-agent':'UNTRUSTED-CALLER',authorization:'PRIVATE-CALLER',cookie:'PRIVATE-COOKIE'},maxRetries:9}));
+ assert.equal(result.result.stopReason,'toolUse');assert.equal(gatewayRequests,2);assert.equal(blocked,1);assert.equal(f.calls.length,1);assert.equal(f.journal.rounds.size,1);
+});
+test('Cloudflare1010 is classified distinctly and never retried',async()=>{
+ let requests=0;const p=createSiwcRunnerProvider({endpoint:'https://runner.example/v1/responses',key,roundId:'browser-integrity-rejected',fetch:async()=>{requests++;return new Response('error code: 1010\n',{status:403,headers:{'content-type':'text/plain'}});}});
+ const result=await collect(p.streamSimple(p.getModels()[0],{messages:[{role:'user',content:'synthetic',timestamp:1}]},{maxRetries:9}));assert.equal(result.result.stopReason,'error');assert.match(result.result.errorMessage,/gateway browser integrity blocked/);assert.equal(isRetryableAssistantError(result.result),false);assert.equal(requests,1);
+});
+
+test('oversized history is a local size failure before transport with no prompt in diagnostics',async(t)=>{
+ const records:string[]=[];t.mock.method(console,'warn',(s:string)=>records.push(s));let calls=0;
+ const p=createSiwcRunnerProvider({endpoint:'https://runner.example/v1/responses',key,roundId:'large-local-history',fetch:async()=>{calls++;throw Error('No request permitted');}});
+ const result=await collect(p.streamSimple(p.getModels()[0],{messages:[{role:'user',content:'PRIVATE-PROMPT-'+ 'x'.repeat(140000),timestamp:1}]},{maxRetries:9}));
+ assert.equal(result.result.stopReason,'error');assert.match(result.result.errorMessage,/runner input limit/);assert.equal(isRetryableAssistantError(result.result),false);assert.equal(calls,0);assert.equal(records.length,1);const record=JSON.parse(records[0]);assert.equal(record.code,'runner_input_limit');assert.ok(record.bodyBytes>131072);assert.equal(record.httpStatus,undefined);assert.ok(!records.join('').includes('PRIVATE-PROMPT'));
 });

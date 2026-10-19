@@ -4,6 +4,7 @@ import { stream, streamSimple } from '@earendil-works/pi-ai/api/openai-responses
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 import { appendAssistantMessageDiagnostic } from '@earendil-works/pi-ai/utils/diagnostics';
 import type { ProviderStreams } from '@earendil-works/pi-ai';
+import { technicalError } from './error-log';
 import { ROUND_ID, RUNNER_MODELS, RUNNER_PATH, signRound, siwcPayload } from './model-runner-protocol';
 /** Explicit per-round provider. Caller MUST durably reserve roundId before use,
  * restore the same ID after interruption, and create a distinct ID for tool continuation.
@@ -13,24 +14,30 @@ export function createSiwcRunnerProvider(connection: { endpoint: string; key: Cr
   if (target.protocol !== 'https:' || target.username || target.password || target.search || target.hash || target.pathname !== RUNNER_PATH || !ROUND_ID.test(connection.roundId)) throw Error('Explicit HTTPS runner and durable round ID required');
   const id = connection.roundId;
   const wrap = (implementation: ProviderStreams['stream']) => ((model, context, options) => {
-    let code = 'runner_transport_interrupted';
+    let code = 'runner_transport_interrupted', bodyBytes: number | undefined, httpStatus: number | undefined, transportError: ReturnType<typeof technicalError> | undefined;
+    const validate = (raw: unknown) => { try { return siwcPayload(raw); } catch (error) { code='unsupported_siwc_request';throw error; } };
     const source = implementation(model, context, { ...options, apiKey: 'runner-transport-only', maxRetries: 0,
       fetch: async (input, init) => {
         if (String(input) !== 'https://model-runner.invalid/v1/responses' || init?.method !== 'POST' || typeof init.body !== 'string') throw Error('Outside runner contract');
-        const body = JSON.stringify(siwcPayload(JSON.parse(init.body)));
-        if (new TextEncoder().encode(body).length > 131072) throw Error('Runner input limit');
+        const body = JSON.stringify(validate(JSON.parse(init.body)));
+        bodyBytes=new TextEncoder().encode(body).length;
+        if (bodyBytes > 131072) { code='runner_input_limit';throw Error('Runner input limit'); }
         init.signal?.throwIfAborted();
         const reservation = await connection.beforeDispatch?.(body);
         if (reservation && reservation !== 'new') { code = reservation === 'conflict' ? 'worker_round_conflict' : 'worker_round_already_reserved'; throw Error('Worker round fenced'); }
         init.signal?.throwIfAborted();
         // Caller auth/cookie/custom-fetch options cannot cross this boundary.
-        const response = await connection.fetch(new Request(target, { method: 'POST', body, signal: init.signal, redirect: 'manual', headers: await signRound(connection.key, body, id, connection.now?.()) }));
+        let response: Response;
+        try { response = await connection.fetch(new Request(target, { method: 'POST', body, signal: init.signal, redirect: 'manual', headers: { ...await signRound(connection.key, body, id, connection.now?.()), 'user-agent': 'Pi-Durable-Model-Runner/1.0' } })); }
+        catch (error) { transportError=technicalError(error);throw error; }
+        httpStatus=response.status;
         if (response.redirected || (response.status >= 300 && response.status < 400)) { code = 'runner_redirect_rejected'; void response.body?.cancel().catch(() => {}); throw Error('Unexpected redirect'); }
         if (!response.ok) {
+          code='runner_http_rejected';
           // Read only bounded, allowlisted service codes; never preserve upstream text.
           const known = ['transport_auth_failed', 'round_conflict', 'round_already_reserved', 'unsupported_siwc_request', 'siwc_reauthorization_required', 'siwc_access_denied', 'siwc_usage_limited', 'siwc_provider_rejected', 'siwc_refresh_resolution_required', 'siwc_refresh_deferred', 'siwc_credential_invalid', 'siwc_round_interrupted', 'round_cancelled'];
           const reader = response.body?.getReader();
-          if (reader) { try { let size = 0, text = ''; while (true) { const p = await reader.read(); if (p.done) break; size += p.value.length; if (size > 2048) break; text += new TextDecoder().decode(p.value); } const c = JSON.parse(text)?.error?.code; if (known.includes(c)) code = c; } catch {} finally { void reader.cancel().catch(() => {}); } }
+          if (reader) { try { let size = 0, text = ''; while (true) { const p = await reader.read(); if (p.done) break; size += p.value.length; if (size > 2048) break; text += new TextDecoder().decode(p.value); } if (response.status === 403 && /^error code:\s*1010\s*$/.test(text.trim())) code = 'runner_gateway_browser_integrity_blocked'; else { const c = JSON.parse(text)?.error?.code; if (known.includes(c)) code = c; } } catch {} finally { void reader.cancel().catch(() => {}); } }
           throw Error('Runner rejected round');
         }
         if (response.headers.get('x-pi-round-id') !== id) { void response.body?.cancel().catch(() => {}); throw Error('Round response mismatch'); }
@@ -45,19 +52,20 @@ export function createSiwcRunnerProvider(connection: { endpoint: string; key: Cr
         return new Response(new ReadableStream<Uint8Array>({
           async pull(output) {
             try { signal?.throwIfAborted(); const part = await reader.read(); signal?.throwIfAborted(); if (part.done) { finish(); output.close(); } else output.enqueue(part.value); }
-            catch { finish(); stop(); output.error(Error('Runner stream interrupted')); }
+            catch { code='runner_stream_interrupted';finish(); stop(); output.error(Error('Runner stream interrupted')); }
           },
           async cancel() { finish(); await reader.cancel().catch(() => {}); },
         }), { status: response.status, headers: response.headers });
       },
-      onPayload: async (payload, selected) => siwcPayload(await options?.onPayload?.(payload, selected) ?? payload),
+      onPayload: async (payload, selected) => validate(await options?.onPayload?.(payload, selected) ?? payload),
     });
     const output = createAssistantMessageEventStream();
     void (async () => {
       for await (const event of source) {
         if (event.type === 'error') {
           // Fixed classifier-facing text prevents the harness retrying ambiguous work.
-          appendAssistantMessageDiagnostic(event.error, { type: 'model_runner_round_failure', timestamp: Date.now(), details: { roundId: id, code } });
+          appendAssistantMessageDiagnostic(event.error, { type: 'model_runner_round_failure', timestamp: Date.now(), details: { roundId: id, code, ...(bodyBytes===undefined?{}:{bodyBytes}), ...(httpStatus===undefined?{}:{httpStatus}) } });
+          try { console.warn(JSON.stringify({event:'pi_error',stage:'model_runner_transport',roundId:id,code,...(bodyBytes===undefined?{}:{bodyBytes}),...(httpStatus===undefined?{}:{httpStatus}),cancelled:options?.signal?.aborted===true,...(transportError?{transportError}:{})})); } catch {}
           event.error.errorMessage = `Model round failed (${code.replaceAll('_', ' ')}); automatic replay disabled.`;
         }
         output.push(event);

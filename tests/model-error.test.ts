@@ -1,7 +1,11 @@
-import {test} from 'node:test';import assert from 'node:assert/strict';import {modelErrorDiagnostic} from '../src/model-error';
+import {test} from 'node:test';import assert from 'node:assert/strict';import {modelErrorDiagnostic,modelErrorInfo} from '../src/model-error';
 test('saved errors expose only fixed categories and allowlisted status/code, never raw payloads',()=>{
  const cases=[['Model access unavailable or daily request limit reached.','local model access guard'],['401: {"code":"invalid_api_key","message":"PRIVATE_TOKEN"}','authentication or subscription credentials'],['429: private prompt','rate or usage limit'],['400: No tool output found for function call call_id PRIVATE','tool response protocol'],['Invalid Codex SSE JSON: private body','response stream protocol'],['Codex SSE response headers timed out after 120000ms PRIVATE','request timeout'],['fetch failed PRIVATE','network transport'],['503: PRIVATE','upstream service error'],['{"code":"context_length_exceeded","message":"PRIVATE"}','context limit'],['400: PRIVATE','request rejected'],['403: PRIVATE','access denied'],['Unrecognized PRIVATE_TOKEN raw output','unclassified saved model error']];
  for(const [raw,expected] of cases){const result=modelErrorDiagnostic(raw);assert.ok(result.includes(expected),result);assert.ok(!result.includes('PRIVATE'));assert.ok(!result.includes('120000'));}
  assert.match(modelErrorDiagnostic('401: {"code":"invalid_api_key"}'),/Reported HTTP 401.*Reported code: invalid_api_key/);
  for(const raw of [null,undefined,{},'x'.repeat(65537),'token=ghp_PRIVATE https://private.example/?secret=PRIVATE','{"code":"PRIVATE_CODE"}','499: PRIVATE'])assert.equal(modelErrorDiagnostic(raw),'Diagnostic hint: unclassified saved model error.');
 });
+
+test('runner browser-integrity errors retain the actionable gateway status and code',()=>{assert.deepEqual(modelErrorInfo('Model round failed (runner gateway browser integrity blocked); automatic replay disabled.'),{category:'runner gateway browser integrity check',httpStatus:'403',code:'cloudflare_1010'});});
+
+test('local runner limits are not mislabeled as HTTP or network failures',()=>{assert.deepEqual(modelErrorInfo('Model round failed (runner input limit); automatic replay disabled.'),{category:'runner input size limit',code:'runner_input_limit'});assert.deepEqual(modelErrorInfo('Model round failed (unsupported siwc request); automatic replay disabled.'),{category:'runner request protocol',code:'unsupported_siwc_request'});});
