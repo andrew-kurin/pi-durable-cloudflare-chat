@@ -1,0 +1,682 @@
+{
+  "version": "1.1.0",
+  "description": "Real 1.1.0 crash snapshot: unsafe execute intent, sequential queued call, safe read-result memo, queued submission, pending v1 tool task, retained history and receipts.",
+  "tables": [
+    {
+      "name": "app_operation_receipts",
+      "sql": "CREATE TABLE app_operation_receipts (operation TEXT PRIMARY KEY, dispatches INTEGER NOT NULL)",
+      "rows": [
+        {
+          "operation": "legacy-unsafe",
+          "dispatches": 1
+        }
+      ]
+    },
+    {
+      "name": "conversations",
+      "sql": "CREATE TABLE conversations (\n\t\tid INTEGER PRIMARY KEY,\n\t\towner_conversation_id INTEGER,\n\t\towner_task_id INTEGER,\n\t\trecord TEXT NOT NULL CHECK (json_valid(record))\n\t) STRICT",
+      "rows": [
+        {
+          "id": 1,
+          "owner_conversation_id": null,
+          "owner_task_id": null,
+          "record": "{\"id\":1}"
+        },
+        {
+          "id": 15,
+          "owner_conversation_id": null,
+          "owner_task_id": null,
+          "record": "{\"id\":15}"
+        },
+        {
+          "id": 28,
+          "owner_conversation_id": null,
+          "owner_task_id": null,
+          "record": "{\"id\":28}"
+        }
+      ]
+    },
+    {
+      "name": "document_revisions",
+      "sql": "CREATE TABLE document_revisions (\n\t\tdocument_id INTEGER NOT NULL,\n\t\tseq INTEGER NOT NULL,\n\t\tkind TEXT NOT NULL CHECK (kind IN ('base', 'delta')),\n\t\tversion INTEGER NOT NULL,\n\t\tcontent TEXT NOT NULL CHECK (json_valid(content)),\n\t\tPRIMARY KEY (document_id, seq)\n\t) STRICT",
+      "rows": [
+        {
+          "document_id": 3,
+          "seq": 1,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"items\":[]}"
+        },
+        {
+          "document_id": 5,
+          "seq": 1,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"sessionId\":\"01a159a9-d3fa-769b-b85a-786c928cd4b7\"}"
+        },
+        {
+          "document_id": 6,
+          "seq": 1,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"model\":{\"provider\":\"faux\",\"modelId\":\"faux-1\"},\"instructions\":\"Retain the legacy system baseline.\"}"
+        },
+        {
+          "document_id": 2,
+          "seq": 7,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"run\":{\"taskId\":11,\"inputs\":[10]},\"tools\":[{\"callId\":\"legacy-unsafe-running\",\"name\":\"workspace_exec\",\"taskId\":14,\"status\":\"pending\"},{\"callId\":\"legacy-unsafe-queued\",\"name\":\"workspace_exec\",\"status\":\"pending\"}]}"
+        },
+        {
+          "document_id": 4,
+          "seq": 7,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"models\":{\"faux/faux-1\":{\"input\":96,\"output\":9,\"cacheRead\":0,\"cacheWrite\":96,\"totalTokens\":201,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0}}},\"tools\":{}}"
+        },
+        {
+          "document_id": 2,
+          "seq": 9,
+          "kind": "delta",
+          "version": 1,
+          "content": "[[\"s\",[\"tools\",0,\"status\"],\"running\"]]"
+        },
+        {
+          "document_id": 17,
+          "seq": 10,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"items\":[]}"
+        },
+        {
+          "document_id": 19,
+          "seq": 10,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"sessionId\":\"01a159a9-d406-769b-b85a-786f7772dc22\"}"
+        },
+        {
+          "document_id": 20,
+          "seq": 10,
+          "kind": "base",
+          "version": 1,
+          "content": "{}"
+        },
+        {
+          "document_id": 20,
+          "seq": 11,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"model\":{\"provider\":\"faux\",\"modelId\":\"faux-1\"}}"
+        },
+        {
+          "document_id": 16,
+          "seq": 16,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"run\":{\"taskId\":23,\"inputs\":[22]},\"tools\":[{\"callId\":\"legacy-safe-running\",\"name\":\"github_read\",\"taskId\":26,\"status\":\"pending\"}]}"
+        },
+        {
+          "document_id": 18,
+          "seq": 16,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"models\":{\"faux/faux-1\":{\"input\":67,\"output\":4,\"cacheRead\":0,\"cacheWrite\":67,\"totalTokens\":138,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0}}},\"tools\":{}}"
+        },
+        {
+          "document_id": 16,
+          "seq": 18,
+          "kind": "delta",
+          "version": 1,
+          "content": "[[\"s\",[\"tools\",0,\"status\"],\"running\"]]"
+        },
+        {
+          "document_id": 3,
+          "seq": 20,
+          "kind": "delta",
+          "version": 1,
+          "content": "[[\"p\",[\"items\"],0,0,[{\"id\":27,\"mode\":\"followUp\",\"content\":\"Queued before upgrade\"}]]]"
+        },
+        {
+          "document_id": 29,
+          "seq": 21,
+          "kind": "base",
+          "version": 1,
+          "content": "{}"
+        },
+        {
+          "document_id": 30,
+          "seq": 21,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"items\":[]}"
+        },
+        {
+          "document_id": 31,
+          "seq": 21,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"models\":{},\"tools\":{}}"
+        },
+        {
+          "document_id": 32,
+          "seq": 21,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"sessionId\":\"01a159a9-d409-769b-b85a-78714d25d04e\"}"
+        },
+        {
+          "document_id": 33,
+          "seq": 21,
+          "kind": "base",
+          "version": 1,
+          "content": "{}"
+        },
+        {
+          "document_id": 33,
+          "seq": 22,
+          "kind": "base",
+          "version": 1,
+          "content": "{\"model\":{\"provider\":\"faux\",\"modelId\":\"faux-1\"}}"
+        }
+      ]
+    },
+    {
+      "name": "documents",
+      "sql": "CREATE TABLE documents (\n\t\tid INTEGER PRIMARY KEY,\n\t\tkind TEXT NOT NULL,\n\t\tfamily INTEGER NOT NULL CHECK (family IN (0, 1)),\n\t\tkey_value TEXT NOT NULL,\n\t\tscope_kind TEXT NOT NULL CHECK (scope_kind IN ('session', 'conversation', 'task')),\n\t\towner_id INTEGER NOT NULL,\n\t\tcreated_at INTEGER NOT NULL,\n\t\tretired_at INTEGER,\n\t\trecord TEXT NOT NULL CHECK (json_valid(record))\n\t) STRICT",
+      "rows": [
+        {
+          "id": 2,
+          "kind": "\"pi.live\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 1,
+          "created_at": 1,
+          "retired_at": null,
+          "record": "{\"id\":2,\"kind\":\"pi.live\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":1},\"history\":\"latest\",\"fork\":\"initial\",\"createdAt\":1}"
+        },
+        {
+          "id": 3,
+          "kind": "\"pi.inbox\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 1,
+          "created_at": 1,
+          "retired_at": null,
+          "record": "{\"id\":3,\"kind\":\"pi.inbox\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":1},\"history\":\"latest\",\"fork\":\"initial\",\"createdAt\":1}"
+        },
+        {
+          "id": 4,
+          "kind": "\"pi.usage\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 1,
+          "created_at": 1,
+          "retired_at": null,
+          "record": "{\"id\":4,\"kind\":\"pi.usage\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":1},\"history\":\"latest\",\"fork\":\"initial\",\"createdAt\":1}"
+        },
+        {
+          "id": 5,
+          "kind": "\"pi.provider\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 1,
+          "created_at": 1,
+          "retired_at": null,
+          "record": "{\"id\":5,\"kind\":\"pi.provider\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":1},\"history\":\"latest\",\"fork\":\"initial\",\"createdAt\":1}"
+        },
+        {
+          "id": 6,
+          "kind": "\"pi.agent\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 1,
+          "created_at": 1,
+          "retired_at": null,
+          "record": "{\"id\":6,\"kind\":\"pi.agent\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":1},\"history\":\"rewindable\",\"fork\":\"asOf\",\"createdAt\":1}"
+        },
+        {
+          "id": 16,
+          "kind": "\"pi.live\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 15,
+          "created_at": 10,
+          "retired_at": null,
+          "record": "{\"id\":16,\"kind\":\"pi.live\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":15},\"history\":\"latest\",\"fork\":\"initial\",\"createdAt\":10}"
+        },
+        {
+          "id": 17,
+          "kind": "\"pi.inbox\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 15,
+          "created_at": 10,
+          "retired_at": null,
+          "record": "{\"id\":17,\"kind\":\"pi.inbox\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":15},\"history\":\"latest\",\"fork\":\"initial\",\"createdAt\":10}"
+        },
+        {
+          "id": 18,
+          "kind": "\"pi.usage\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 15,
+          "created_at": 10,
+          "retired_at": null,
+          "record": "{\"id\":18,\"kind\":\"pi.usage\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":15},\"history\":\"latest\",\"fork\":\"initial\",\"createdAt\":10}"
+        },
+        {
+          "id": 19,
+          "kind": "\"pi.provider\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 15,
+          "created_at": 10,
+          "retired_at": null,
+          "record": "{\"id\":19,\"kind\":\"pi.provider\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":15},\"history\":\"latest\",\"fork\":\"initial\",\"createdAt\":10}"
+        },
+        {
+          "id": 20,
+          "kind": "\"pi.agent\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 15,
+          "created_at": 10,
+          "retired_at": null,
+          "record": "{\"id\":20,\"kind\":\"pi.agent\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":15},\"history\":\"rewindable\",\"fork\":\"asOf\",\"createdAt\":10}"
+        },
+        {
+          "id": 29,
+          "kind": "\"pi.live\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 28,
+          "created_at": 21,
+          "retired_at": null,
+          "record": "{\"id\":29,\"kind\":\"pi.live\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":28},\"history\":\"latest\",\"fork\":\"initial\",\"createdAt\":21}"
+        },
+        {
+          "id": 30,
+          "kind": "\"pi.inbox\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 28,
+          "created_at": 21,
+          "retired_at": null,
+          "record": "{\"id\":30,\"kind\":\"pi.inbox\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":28},\"history\":\"latest\",\"fork\":\"initial\",\"createdAt\":21}"
+        },
+        {
+          "id": 31,
+          "kind": "\"pi.usage\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 28,
+          "created_at": 21,
+          "retired_at": null,
+          "record": "{\"id\":31,\"kind\":\"pi.usage\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":28},\"history\":\"latest\",\"fork\":\"initial\",\"createdAt\":21}"
+        },
+        {
+          "id": 32,
+          "kind": "\"pi.provider\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 28,
+          "created_at": 21,
+          "retired_at": null,
+          "record": "{\"id\":32,\"kind\":\"pi.provider\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":28},\"history\":\"latest\",\"fork\":\"initial\",\"createdAt\":21}"
+        },
+        {
+          "id": 33,
+          "kind": "\"pi.agent\"",
+          "family": 0,
+          "key_value": "\"\"",
+          "scope_kind": "conversation",
+          "owner_id": 28,
+          "created_at": 21,
+          "retired_at": null,
+          "record": "{\"id\":33,\"kind\":\"pi.agent\",\"scope\":{\"kind\":\"conversation\",\"conversationId\":28},\"history\":\"rewindable\",\"fork\":\"asOf\",\"createdAt\":21}"
+        }
+      ]
+    },
+    {
+      "name": "durable_metadata",
+      "sql": "CREATE TABLE durable_metadata (\n\t\tsingleton INTEGER PRIMARY KEY CHECK (singleton = 1),\n\t\tnext_id TEXT NOT NULL,\n\t\tnext_seq INTEGER NOT NULL\n\t) STRICT",
+      "rows": [
+        {
+          "singleton": 1,
+          "next_id": "37",
+          "next_seq": 25
+        }
+      ]
+    },
+    {
+      "name": "durable_schema",
+      "sql": "CREATE TABLE durable_schema (\n\t\t\tsingleton INTEGER PRIMARY KEY CHECK (singleton = 1),\n\t\t\tversion INTEGER NOT NULL CHECK (version >= 0)\n\t\t) STRICT",
+      "rows": [
+        {
+          "singleton": 1,
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "entries",
+      "sql": "CREATE TABLE entries (\n\t\tid INTEGER PRIMARY KEY,\n\t\tconversation_id INTEGER NOT NULL,\n\t\thead INTEGER,\n\t\tcommit_seq INTEGER NOT NULL,\n\t\trecord TEXT NOT NULL CHECK (json_valid(record))\n\t) STRICT",
+      "rows": [
+        {
+          "id": 7,
+          "conversation_id": 1,
+          "head": null,
+          "commit_seq": 2,
+          "record": "{\"kind\":\"pi.user\",\"model\":[{\"role\":\"user\",\"content\":\"Retain the original migration history.\",\"timestamp\":1}],\"data\":{\"migration\":\"1.1.0\"},\"id\":7,\"conversationId\":1}"
+        },
+        {
+          "id": 9,
+          "conversation_id": 1,
+          "head": null,
+          "commit_seq": 3,
+          "record": "{\"model\":[{\"role\":\"user\",\"content\":\"Synthetic unsafe task\",\"timestamp\":1792505664510}],\"kind\":\"pi.user\",\"id\":9,\"conversationId\":1}"
+        },
+        {
+          "id": 12,
+          "conversation_id": 1,
+          "head": null,
+          "commit_seq": 5,
+          "record": "{\"model\":[{\"role\":\"system\",\"content\":\"\",\"sections\":{\"instructions\":\"<instructions>\\nRetain the legacy system baseline.\\n</instructions>\"},\"toolsAdded\":[{\"name\":\"workspace_exec\",\"description\":\"Synthetic unsafe operation\",\"parameters\":{\"type\":\"object\",\"properties\":{}}},{\"name\":\"github_read\",\"description\":\"Synthetic public read\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}],\"timestamp\":1792505664512}],\"kind\":\"pi.system\",\"id\":12,\"conversationId\":1,\"byTaskId\":11}"
+        },
+        {
+          "id": 13,
+          "conversation_id": 1,
+          "head": null,
+          "commit_seq": 7,
+          "record": "{\"model\":[{\"role\":\"assistant\",\"content\":[{\"type\":\"toolCall\",\"id\":\"legacy-unsafe-running\",\"name\":\"workspace_exec\",\"arguments\":{}},{\"type\":\"toolCall\",\"id\":\"legacy-unsafe-queued\",\"name\":\"workspace_exec\",\"arguments\":{}}],\"api\":\"faux:1792505664503:qiz8e8r08p\",\"provider\":\"faux\",\"model\":\"faux-1\",\"usage\":{\"input\":96,\"output\":9,\"cacheRead\":0,\"cacheWrite\":96,\"totalTokens\":201,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0}},\"stopReason\":\"toolUse\",\"timestamp\":1792505664503}],\"kind\":\"pi.assistant\",\"id\":13,\"conversationId\":1,\"byTaskId\":11}"
+        },
+        {
+          "id": 21,
+          "conversation_id": 15,
+          "head": null,
+          "commit_seq": 12,
+          "record": "{\"model\":[{\"role\":\"user\",\"content\":\"Synthetic safe read\",\"timestamp\":1792505664518}],\"kind\":\"pi.user\",\"id\":21,\"conversationId\":15}"
+        },
+        {
+          "id": 24,
+          "conversation_id": 15,
+          "head": null,
+          "commit_seq": 14,
+          "record": "{\"model\":[{\"role\":\"system\",\"content\":\"\",\"toolsAdded\":[{\"name\":\"workspace_exec\",\"description\":\"Synthetic unsafe operation\",\"parameters\":{\"type\":\"object\",\"properties\":{}}},{\"name\":\"github_read\",\"description\":\"Synthetic public read\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}],\"timestamp\":1792505664519}],\"kind\":\"pi.system\",\"id\":24,\"conversationId\":15,\"byTaskId\":23}"
+        },
+        {
+          "id": 25,
+          "conversation_id": 15,
+          "head": null,
+          "commit_seq": 16,
+          "record": "{\"model\":[{\"role\":\"assistant\",\"content\":[{\"type\":\"toolCall\",\"id\":\"legacy-safe-running\",\"name\":\"github_read\",\"arguments\":{}}],\"api\":\"faux:1792505664503:qiz8e8r08p\",\"provider\":\"faux\",\"model\":\"faux-1\",\"usage\":{\"input\":67,\"output\":4,\"cacheRead\":0,\"cacheWrite\":67,\"totalTokens\":138,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0}},\"stopReason\":\"toolUse\",\"timestamp\":1792505664503}],\"kind\":\"pi.assistant\",\"id\":25,\"conversationId\":15,\"byTaskId\":23}"
+        },
+        {
+          "id": 34,
+          "conversation_id": 28,
+          "head": null,
+          "commit_seq": 23,
+          "record": "{\"kind\":\"pi.assistant\",\"model\":[{\"role\":\"assistant\",\"content\":[{\"type\":\"toolCall\",\"id\":\"legacy-pending-call\",\"name\":\"legacy_pending\",\"arguments\":{}}],\"api\":\"faux\",\"provider\":\"faux\",\"model\":\"faux-1\",\"usage\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":0,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0}},\"stopReason\":\"toolUse\",\"timestamp\":1792505664521}],\"id\":34,\"conversationId\":28}"
+        }
+      ]
+    },
+    {
+      "name": "record_ids",
+      "sql": "CREATE TABLE record_ids (\n\t\tid INTEGER PRIMARY KEY,\n\t\trecord_type TEXT NOT NULL CHECK (record_type IN ('conversation', 'entry', 'task', 'submission', 'document'))\n\t) STRICT",
+      "rows": [
+        {
+          "id": 1,
+          "record_type": "conversation"
+        },
+        {
+          "id": 2,
+          "record_type": "document"
+        },
+        {
+          "id": 3,
+          "record_type": "document"
+        },
+        {
+          "id": 4,
+          "record_type": "document"
+        },
+        {
+          "id": 5,
+          "record_type": "document"
+        },
+        {
+          "id": 6,
+          "record_type": "document"
+        },
+        {
+          "id": 7,
+          "record_type": "entry"
+        },
+        {
+          "id": 8,
+          "record_type": "submission"
+        },
+        {
+          "id": 9,
+          "record_type": "entry"
+        },
+        {
+          "id": 10,
+          "record_type": "submission"
+        },
+        {
+          "id": 11,
+          "record_type": "task"
+        },
+        {
+          "id": 12,
+          "record_type": "entry"
+        },
+        {
+          "id": 13,
+          "record_type": "entry"
+        },
+        {
+          "id": 14,
+          "record_type": "task"
+        },
+        {
+          "id": 15,
+          "record_type": "conversation"
+        },
+        {
+          "id": 16,
+          "record_type": "document"
+        },
+        {
+          "id": 17,
+          "record_type": "document"
+        },
+        {
+          "id": 18,
+          "record_type": "document"
+        },
+        {
+          "id": 19,
+          "record_type": "document"
+        },
+        {
+          "id": 20,
+          "record_type": "document"
+        },
+        {
+          "id": 21,
+          "record_type": "entry"
+        },
+        {
+          "id": 22,
+          "record_type": "submission"
+        },
+        {
+          "id": 23,
+          "record_type": "task"
+        },
+        {
+          "id": 24,
+          "record_type": "entry"
+        },
+        {
+          "id": 25,
+          "record_type": "entry"
+        },
+        {
+          "id": 26,
+          "record_type": "task"
+        },
+        {
+          "id": 27,
+          "record_type": "submission"
+        },
+        {
+          "id": 28,
+          "record_type": "conversation"
+        },
+        {
+          "id": 29,
+          "record_type": "document"
+        },
+        {
+          "id": 30,
+          "record_type": "document"
+        },
+        {
+          "id": 31,
+          "record_type": "document"
+        },
+        {
+          "id": 32,
+          "record_type": "document"
+        },
+        {
+          "id": 33,
+          "record_type": "document"
+        },
+        {
+          "id": 34,
+          "record_type": "entry"
+        },
+        {
+          "id": 35,
+          "record_type": "submission"
+        },
+        {
+          "id": 36,
+          "record_type": "task"
+        }
+      ]
+    },
+    {
+      "name": "submissions",
+      "sql": "CREATE TABLE submissions (\n\t\tid INTEGER PRIMARY KEY,\n\t\tconversation_id INTEGER NOT NULL,\n\t\trequest_id TEXT,\n\t\tstatus TEXT NOT NULL CHECK (status IN ('queued', 'placed', 'done', 'unanswered')),\n\t\trecord TEXT NOT NULL CHECK (json_valid(record))\n\t) STRICT",
+      "rows": [
+        {
+          "id": 8,
+          "conversation_id": 1,
+          "request_id": "\"legacy-history\"",
+          "status": "done",
+          "record": "{\"conversationId\":1,\"requestId\":\"legacy-history\",\"type\":\"write\",\"status\":\"done\",\"entry\":7,\"id\":8}"
+        },
+        {
+          "id": 10,
+          "conversation_id": 1,
+          "request_id": "\"legacy-operation\"",
+          "status": "placed",
+          "record": "{\"conversationId\":1,\"requestId\":\"legacy-operation\",\"type\":\"input\",\"status\":\"placed\",\"entry\":9,\"id\":10}"
+        },
+        {
+          "id": 22,
+          "conversation_id": 15,
+          "request_id": "\"legacy-read\"",
+          "status": "placed",
+          "record": "{\"conversationId\":15,\"requestId\":\"legacy-read\",\"type\":\"input\",\"status\":\"placed\",\"entry\":21,\"id\":22}"
+        },
+        {
+          "id": 27,
+          "conversation_id": 1,
+          "request_id": "\"legacy-queued\"",
+          "status": "queued",
+          "record": "{\"conversationId\":1,\"requestId\":\"legacy-queued\",\"type\":\"input\",\"status\":\"queued\",\"id\":27}"
+        },
+        {
+          "id": 35,
+          "conversation_id": 28,
+          "request_id": "\"legacy-pending-entry\"",
+          "status": "done",
+          "record": "{\"conversationId\":28,\"requestId\":\"legacy-pending-entry\",\"type\":\"write\",\"status\":\"done\",\"entry\":34,\"id\":35}"
+        }
+      ]
+    },
+    {
+      "name": "tasks",
+      "sql": "CREATE TABLE tasks (\n\t\tid INTEGER PRIMARY KEY,\n\t\tconversation_id INTEGER NOT NULL,\n\t\tkind TEXT NOT NULL,\n\t\tstatus TEXT NOT NULL CHECK (status IN ('pending', 'running', 'waiting', 'completing', 'terminal')),\n\t\tabort_requested INTEGER NOT NULL CHECK (abort_requested IN (0, 1)),\n\t\tbackground INTEGER NOT NULL CHECK (background IN (0, 1)),\n\t\trecord TEXT NOT NULL CHECK (json_valid(record))\n\t) STRICT",
+      "rows": [
+        {
+          "id": 11,
+          "conversation_id": 1,
+          "kind": "\"pi.generation\"",
+          "status": "waiting",
+          "abort_requested": 0,
+          "background": 0,
+          "record": "{\"id\":11,\"conversationId\":1,\"kind\":\"pi.generation\",\"version\":1,\"input\":{},\"background\":false,\"abortRequested\":false,\"state\":{\"status\":\"waiting\",\"checkpoint\":{\"phase\":\"tools\",\"assistant\":13,\"tools\":[14],\"pending\":[\"legacy-unsafe-queued\"]},\"on\":[14],\"policy\":\"allSettled\"},\"startedAt\":1792505664511}"
+        },
+        {
+          "id": 14,
+          "conversation_id": 1,
+          "kind": "\"pi.tool\"",
+          "status": "running",
+          "abort_requested": 0,
+          "background": 0,
+          "record": "{\"id\":14,\"conversationId\":1,\"kind\":\"pi.tool\",\"version\":1,\"input\":{\"assistant\":13,\"callId\":\"legacy-unsafe-running\"},\"owner\":11,\"background\":false,\"abortRequested\":false,\"state\":{\"status\":\"running\",\"checkpoint\":{\"phase\":\"execute\",\"arguments\":{},\"replay\":\"unsafe\"}},\"startedAt\":1792505664514}"
+        },
+        {
+          "id": 23,
+          "conversation_id": 15,
+          "kind": "\"pi.generation\"",
+          "status": "waiting",
+          "abort_requested": 0,
+          "background": 0,
+          "record": "{\"id\":23,\"conversationId\":15,\"kind\":\"pi.generation\",\"version\":1,\"input\":{},\"background\":false,\"abortRequested\":false,\"state\":{\"status\":\"waiting\",\"checkpoint\":{\"phase\":\"tools\",\"assistant\":25,\"tools\":[26],\"pending\":[]},\"on\":[26],\"policy\":\"allSettled\"},\"startedAt\":1792505664519}"
+        },
+        {
+          "id": 26,
+          "conversation_id": 15,
+          "kind": "\"pi.tool\"",
+          "status": "running",
+          "abort_requested": 0,
+          "background": 0,
+          "record": "{\"id\":26,\"conversationId\":15,\"kind\":\"pi.tool\",\"version\":1,\"input\":{\"assistant\":25,\"callId\":\"legacy-safe-running\"},\"owner\":23,\"background\":false,\"abortRequested\":false,\"state\":{\"status\":\"running\",\"checkpoint\":{\"phase\":\"execute\",\"arguments\":{},\"replay\":\"safe\"}},\"startedAt\":1792505664519,\"memos\":{\"read-result\":{\"content\":[{\"type\":\"text\",\"text\":\"retained legacy memo output\"}]}}}"
+        },
+        {
+          "id": 36,
+          "conversation_id": 28,
+          "kind": "\"pi.tool\"",
+          "status": "pending",
+          "abort_requested": 0,
+          "background": 0,
+          "record": "{\"id\":36,\"conversationId\":28,\"kind\":\"pi.tool\",\"version\":1,\"input\":{\"assistant\":34,\"callId\":\"legacy-pending-call\"},\"background\":false,\"abortRequested\":false,\"state\":{\"status\":\"pending\",\"checkpoint\":{\"phase\":\"call\"}}}"
+        }
+      ]
+    }
+  ]
+}

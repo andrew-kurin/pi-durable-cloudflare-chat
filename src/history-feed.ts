@@ -126,6 +126,17 @@ export class HistoryFeed {
             for(const event of batch)projection.apply(event.type==='snapshot'?await fullHistorySnapshot(this.harness,sid,event):event);
             send();
           });
+          void source.closed?.then(async end => {
+            if (ended) return;
+            if (end.reason === 'session_failed') {
+              projection.sessionFailed();
+              send();
+            }
+            await stop();
+          }).catch(error => {
+            logTechnicalError('request', error, crypto.randomUUID());
+            void stop();
+          });
           timer = setTimeout(() => {
             void stop();
           }, 55000);

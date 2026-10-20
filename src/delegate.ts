@@ -9,6 +9,6 @@ export function delegation(provider='openai-codex', modelId='gpt-6-luna') {
  const child=await api.conversation(id,context);if(!child)throw new Error('Missing worker');const result=await(await child.submit({type:'input',content:args.task,requestId:`luna:${api.taskId}`},context)).wait(context);
  if(result.status!=='done'||result.type!=='input')throw new Error('Luna did not complete');
  const answer=await api.commit(tx=>tx.entry(AssistantEntry,result.answer),context);
- return {content:[{type:'text',text:answer?entryText(answer):''}]};
+ return {output:[{type:'text',text:answer?entryText(answer):''}]};
  }})]});
 }

@@ -23,3 +23,10 @@ test('latest response determines classification, malformed diagnostic status is 
  const reverse=message('Unavailable',403);reverse.diagnostics!.push({type:'provider_http_response',timestamp:1,details:{status:503}});assert.equal(isRetryableAssistantError(reverse),true);
  const invalid=message('fetch failed');invalid.diagnostics=[{type:'provider_http_response',timestamp:1,details:{status:'403'}}];assert.equal(isRetryableAssistantError(invalid),true);
 });
+
+test('1.3 upstream gateway patterns remain retryable while captured terminal status still wins',()=>{
+ for(const text of ['The service is temporarily unavailable','The upstream provider returned an error','unable to forward upstream','exceeded request buffer limit while retrying upstream']){
+  assert.equal(isRetryableAssistantError(message(text)),true,text);
+  assert.equal(isRetryableAssistantError(message(text,403)),false,text);
+ }
+});

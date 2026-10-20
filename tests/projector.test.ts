@@ -101,3 +101,14 @@ test('wait cards show in-flight observation and do not present a still-running c
  p.entry(resultEntry('c','workspace_wait',{outcome:'still_running',waitedMs:20000,taskRemainingMs:800000,commandRemainingMs:280000,nextStep:'Wait again; requested work is not complete.'}));let row=p.view().messages[0].tools[0];assert.equal(row.label,'Wait for command');assert.match(row.summary!,/still running.*not complete/);assert.match(row.output!,/280000/);
  p.entry(resultEntry('c','workspace_wait',{outcome:'completed',nextStep:'Continue requested dependent work.'}));row=p.view().messages[0].tools[0];assert.match(row.summary!,/Continue requested work/);
 });
+
+test('1.3 nested-tool events are excluded from transcript projection and aborted compaction does not clear a prior failure',()=>{
+ const p=new ChatProjection();
+ p.apply({type:'compaction_end',taskId:1,reason:'manual',error:'PRIVATE_FAILURE'} as any);assert.ok(p.view().compactionFailure);
+ p.apply({type:'compaction_end',taskId:2,reason:'manual'} as any);assert.ok(p.view().compactionFailure);
+ p.apply({type:'tool_execution_start',toolCallId:'outer/1',toolName:'workspace_exec',parentToolCallId:'outer',parentTaskId:3,args:{private:'PRIVATE_NESTED_ARGS'}} as any);
+ p.apply({type:'tool_execution_end',toolCallId:'outer/1',toolName:'workspace_exec',parentToolCallId:'outer',parentTaskId:3,result:{structuredOutput:'PRIVATE_NESTED_RESULT'}} as any);
+ assert.equal(p.view().messages.length,0);assert.doesNotMatch(JSON.stringify(p.view()),/PRIVATE_/);
+ p.entry({id:5,kind:'pi.compaction',model:[]} as any);assert.equal(p.view().compactionFailure,null);
+ p.apply({type:'snapshot',entries:[{id:5,kind:'pi.compaction',model:[]}],tools:[],inbox:[],agent:{},usage:{},compactionFailure:{taskId:6,reason:'manual',error:'PRIVATE_NEWER_FAILURE'}} as any);assert.ok(p.view().compactionFailure);assert.doesNotMatch(JSON.stringify(p.view()),/PRIVATE_/);
+});
