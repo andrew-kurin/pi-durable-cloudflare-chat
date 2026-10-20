@@ -5,7 +5,7 @@ import { ProviderSessions, createChatModels } from "./provider-sessions";
 import { HistoryFeed } from "./history-feed";
 import { WorkspaceCoordinator } from "./workspace-coordinator";
 import { ChatCatalog } from "./chat-catalog";
-import { RequestError, jsonObject } from "./http-input";
+import { RequestError, discardBody, jsonObject } from "./http-input";
 import { SubmissionAdmission, type ArrivedSubmission } from "./submission-admission";
 import { logTechnicalError } from "./error-log";
 import { DurableObject } from "cloudflare:workers";
@@ -460,8 +460,10 @@ export class Assistant extends DurableObject<Env> {
           await this.chatCatalog.rename(sid, b.title.trim()),
         );
       }
-      if (path === "/api/sessions" && request.method === "POST")
+      if (path === "/api/sessions" && request.method === "POST") {
+        await discardBody(request);
         return Response.json(await this.chatCatalog.create());
+      }
       if (path === "/api/submit" && request.method === "POST") {
         await this.providers.assertCanSubmit(() => this.sessionModel(sid));
         const raw = await request.text();
@@ -485,6 +487,7 @@ export class Assistant extends DurableObject<Env> {
         return Response.json(receipt);
       }
       if (path === "/api/abort" && request.method === "POST") {
+        await discardBody(request);
         return Response.json({ aborted: await this.submissions.stop(sid) });
       }
       if (path === "/api/events/close" && request.method === "POST") {

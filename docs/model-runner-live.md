@@ -165,6 +165,10 @@ reconstruction without duplicate dispatch, rejects tampered bodies, and propagat
 Stop to the backend AbortSignal. Test-only allowlisting maps the exact HTTPS fixture
 endpoint to native HTTP loopback; no public endpoint/TLS or real credential is used.
 
+The follow-up [Stop socket boundary investigation](stop-socket-boundary.md)
+records deterministic unread-POST-body regressions, lifecycle diagnostics,
+repeated fresh-process verification and the limits of historical-failure attribution.
+
 These full-runtime tests caught Workers rejecting `redirect:"error"` and requiring
 bound global fetch; transport now uses manual mode with explicit redirect rejection
 and Assistant supplies a bound fetch closure. An outboundService test adapter lost

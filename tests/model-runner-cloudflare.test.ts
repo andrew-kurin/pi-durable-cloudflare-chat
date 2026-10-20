@@ -1,53 +1,94 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { connect } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { build } from 'esbuild';
-import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { CoreHeaders, Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { generateKeyPair, SignJWT, exportJWK } from 'jose';
 import { createSiwcRunner } from '../services/model-runner/live-runner';
 import { createRunnerServer } from '../services/model-runner/http';
 import { MemoryRoundJournal } from '../services/model-runner/core';
 import { fakeBackend } from '../services/model-runner/fake-backend';
 import { transportKey } from '../src/model-runner-protocol';
+import { runnerLifecycle } from './fixtures/runner-lifecycle';
 async function fixture(tamper=false,held=false){
+ const lifecycle=runnerLifecycle();
  const pair=await generateKeyPair('RS256'),jwks={keys:[{...await exportJWK(pair.publicKey),kid:'fixture'}]};
  const token=await new SignJWT({email:'owner@example.test'}).setProtectedHeader({alg:'RS256',kid:'fixture'}).setIssuer('https://owner.cloudflareaccess.com').setAudience('fixture').setSubject('fixture').setIssuedAt().setExpirationTime('5m').sign(pair.privateKey);
  let started!:()=>void,stopped!:()=>void,didCancel=false;const entered=new Promise<void>(ok=>started=ok),canceled=new Promise<void>(ok=>stopped=ok);
  const journal=new MemoryRoundJournal(),bodies:any[]=[],wire:any[]=[];
- const runner=createSiwcRunner({key:await transportKey(new Uint8Array(32).fill(7)),journal,credentials:{access:async()=>'SYNTHETIC-ACCESS'},fetch:async(_u,init)=>{const body=JSON.parse(init!.body as string);bodies.push(body);started();if(held){init!.signal!.addEventListener('abort',()=>{didCancel=true;stopped();},{once:true});
+ const runner=createSiwcRunner({key:await transportKey(new Uint8Array(32).fill(7)),journal,credentials:{access:async()=>'SYNTHETIC-ACCESS'},diagnostic:event=>lifecycle.mark('runner.'+event.outcome),fetch:async(_u,init)=>{const body=JSON.parse(init!.body as string);bodies.push(body);lifecycle.mark('provider.entered');started();if(held){init!.signal!.addEventListener('abort',()=>{didCancel=true;lifecycle.mark('provider.abort');stopped();},{once:true});
  const events=[
   {type:'response.created',response:{id:'resp_held_fixture'}},
   {type:'response.output_item.added',output_index:0,item:{type:'message',id:'msg_held_fixture',role:'assistant',content:[]}},
   {type:'response.content_part.added',output_index:0,content_index:0,part:{type:'output_text',text:'',annotations:[]}},
   {type:'response.output_text.delta',output_index:0,content_index:0,delta:'held-stream-ready'},
  ];
- return new Response(new ReadableStream({start(out){out.enqueue(new TextEncoder().encode(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join('')));}}),{headers:{'content-type':'text/event-stream'}});}return fakeBackend(body,'',init!.signal!);}});
+ return new Response(new ReadableStream({start(out){out.enqueue(new TextEncoder().encode(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join('')));},cancel(){lifecycle.mark('provider.body.cancel');}}),{headers:{'content-type':'text/event-stream'}});}return fakeBackend(body,'',init!.signal!);}});
  const server=createRunnerServer(async request=>{wire.push({body:await request.clone().text(),id:request.headers.get('x-pi-round-id')});assert.equal(request.headers.get('user-agent'),'Pi-Durable-Model-Runner/1.0');assert.equal(request.headers.has('authorization'),false);assert.equal(request.headers.has('x-pi-generation-task'),false);return runner(request);});server.listen(0,'127.0.0.1');await once(server,'listening');const port=(server.address() as import('node:net').AddressInfo).port;
  const contents=`const nativeFetch=globalThis.fetch;globalThis.fetch=async(input,init)=>{const req=new Request(input,init),url=new URL(req.url);if(url.href==='https://owner.cloudflareaccess.com/cdn-cgi/access/certs')return Response.json(${JSON.stringify(jwks)});if(url.href!=='https://runner.example/v1/responses')throw Error('External network denied in fixture');const body=await req.text(),headers=new Headers(req.headers);headers.delete('content-length');return nativeFetch('http://127.0.0.1:${port}/v1/responses',{method:req.method,body:body+${JSON.stringify(tamper?' ':'')},headers,signal:req.signal,redirect:'manual'});};import worker,{Assistant} from '../src/index';export class TestAssistant extends Assistant {async settle(op,session){return this.harness.session(session).wait(op);}async rounds(){return [...(await this.ctx.storage.list({prefix:'runner-round:v1:'})).entries()];}}export default {fetch(r,env){const u=new URL(r.url);if(u.pathname==='/__test/settle')return env.Assistant.getByName('private-owner-v1').settle(u.searchParams.get('op'),u.searchParams.get('session')).then(x=>Response.json(x));if(u.pathname==='/__test/rounds')return env.Assistant.getByName('private-owner-v1').rounds().then(x=>Response.json(x));return worker.fetch(r,env);}};`;
  const bundle=await build({stdin:{contents,resolveDir:path.resolve('tests'),loader:'ts'},bundle:true,write:false,format:'esm',platform:'browser',target:'es2022',external:['node:*','cloudflare:*'],logLevel:'silent'});
+ lifecycle.runner(server);
  const persist=await mkdtemp(path.join(tmpdir(),'pi-worker-sqlite-'));
  const options=convertV4MiniflareOptions({cf:false,modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-10-11',compatibilityFlags:['nodejs_compat'],durableObjects:{Assistant:{className:'TestAssistant',useSQLite:true}},resourcePersistencePath:persist,
   bindings:{ACCESS_TEAM_DOMAIN:'https://owner.cloudflareaccess.com',ACCESS_AUD:'fixture',OWNER_EMAILS:'owner@example.test',APP_ORIGIN:'https://chat.example.test',ENABLE_MODEL:'true',ENABLE_SUBSCRIPTION_LOGIN:'false',ENABLE_MODEL_RUNNER:'true',MODEL_RUNNER_ENDPOINT:'https://runner.example/v1/responses',MODEL_RUNNER_TRANSPORT_KEY:'07'.repeat(32),CREDENTIAL_ENCRYPTION_KEY:Buffer.alloc(32,42).toString('base64')},
 
  });
  let mf=new Miniflare(options);const headers={'Cf-Access-Jwt-Assertion':token,origin:'https://chat.example.test','content-type':'application/json'};
+ lifecycle.runtime(await mf.ready);
  let session='1';
- const call=async(p:string,body?:any)=>{const url=new URL('https://chat.example.test/'+p);url.searchParams.set('session',session);let r:Response;try{r=await mf.dispatchFetch(url,{headers,...(body?{method:'POST',body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(8000)});}catch(error){throw new Error('Fixture request failed: '+p,{cause:error});}assert.equal(r.status,200,await r.clone().text());const result=await r.json() as any;if(p==='api/sessions'&&body)session=result.id;return result;};
+ // Pipeline both requests in one TCP write, so peer closure cannot be hidden by
+ // the client's pool opening a replacement socket between the POST and read.
+ const pipeline=async(p:string)=>{
+  const runtime=await mf.ready,socket=connect({host:runtime.hostname,port:Number(runtime.port)});
+  let wire='';
+  try{
+   await once(socket,'connect');
+   lifecycle.api(socket);lifecycle.mark('api.pipeline',{path:p});
+   const received=new Promise<number>((resolve,reject)=>{
+    socket.on('data',chunk=>{wire+=chunk;const count=wire.match(/HTTP\/1\.1 200 OK\r\n/g)?.length??0;if(count===2&&wire.endsWith('0\r\n\r\n'))resolve(count);});
+    socket.once('end',()=>resolve(wire.match(/HTTP\/1\.1 200 OK\r\n/g)?.length??0));
+    socket.once('error',reject);socket.setTimeout(8000,()=>reject(Error('Pipelined fixture response timed out')));
+   });
+   const request=(method:string,route:string,body='')=>`${method} /${route} HTTP/1.1\r\nHost: ${runtime.host}\r\n${CoreHeaders.ORIGINAL_URL}: https://chat.example.test/${route}\r\n${Object.entries(headers).map(([k,v])=>k+': '+v+'\r\n').join('')}Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`;
+   socket.write(request('POST',p+'?session='+session,'{}')+request('GET','__test/rounds?session='+session));
+   return await received;
+  }finally{socket.destroy();}
+ };
+ const call=async(p:string,body?:any)=>{
+  const url=new URL('https://chat.example.test/'+p);url.searchParams.set('session',session);lifecycle.mark('call.start',{path:p});
+  try{
+   const r=await mf.dispatchFetch(url,{headers,...(body?{method:'POST',body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(8000)});
+   assert.equal(r.status,200,await r.clone().text());const result=await r.json() as any;
+   lifecycle.mark('call.complete',{path:p,status:result.status});
+   if(p==='api/sessions'&&body)session=result.id;return result;
+  }catch(error){throw new Error('Fixture request failed: '+p+'; lifecycle='+JSON.stringify(lifecycle.events),{cause:error});}
+ };
  // Observe parsed assistant text in the Worker, not merely backend fetch entry.
  const ready=async()=>{
   const deadline=Date.now()+4000;
   while(Date.now()<deadline){
    const snapshot=await call('api/events?snapshot=1');
-   if(snapshot.partial==='held-stream-ready'){assert.equal(snapshot.busy,true);assert.equal(didCancel,false,'stream canceled before Stop');return;}
+   if(snapshot.partial==='held-stream-ready'){assert.equal(snapshot.busy,true);assert.equal(didCancel,false,'stream canceled before Stop');lifecycle.mark('worker.stream.consumed');return;}
    await new Promise(ok=>setTimeout(ok,10));
   }
   throw Error('Worker did not consume the valid held stream');
  };
- return{bodies,wire,journal,call,entered,canceled,ready,restart:async()=>{await mf.dispose();mf=new Miniflare(options);},dispose:async()=>{await mf.dispose();server.closeAllConnections();await new Promise<void>(ok=>server.close(()=>ok()));await rm(persist,{recursive:true,force:true});}};
+ return{bodies,wire,journal,call,pipeline,entered,canceled,ready,events:lifecycle.events,observed:lifecycle.observed,
+  restart:async()=>{lifecycle.mark('runtime.restart');await mf.dispose();mf=new Miniflare(options);lifecycle.runtime(await mf.ready);},
+  dispose:async()=>{lifecycle.mark('fixture.dispose');try{await mf.dispose();server.closeAllConnections();await new Promise<void>(ok=>server.close(()=>ok()));await rm(persist,{recursive:true,force:true});}finally{lifecycle.close();}},
+ };
 }
+for(const p of ['api/sessions','api/abort'])test('actual Worker '+p+' consumes its POST body before a pipelined observation',{timeout:20000},async()=>{
+ const f=await fixture();try{
+  await f.call('api/sessions',{});
+  assert.equal(await f.pipeline(p),2,p+' closed the connection before the observation; lifecycle='+JSON.stringify(f.events));
+  assert.equal(f.wire.length,0);assert.equal(f.bodies.length,0);
+ }finally{await f.dispose();}
+});
 test('actual authenticated Assistant/SQLite Worker -> signed HTTP runner -> fake SIWC tool continuation, durable replay after process reconstruction',{timeout:20000},async()=>{
  const f=await fixture();try{
   const chat=await f.call('api/sessions',{});assert.match(chat.id,/^\d+$/);const status=await f.call('api/status');assert.equal(status.model.provider,'model-runner-siwc');assert.equal(status.connected,true);assert.equal(status.canLogin,false);
@@ -60,5 +101,23 @@ test('actual Worker signed-body tampering fails before SIWC credentials/inferenc
  const f=await fixture(true);try{await f.call('api/sessions',{});const body={text:'tamper fixture',operationId:'cloudflare-operation-2'};await f.call('api/submit',body);assert.equal((await f.call('__test/settle?op='+body.operationId)).status,'unanswered');assert.equal(f.wire.length,1);assert.equal(f.journal.rounds.size,0);assert.equal(f.bodies.length,0);assert.equal((await f.call('__test/rounds')).length,1);}finally{await f.dispose();}
 });
 test('actual Worker Stop aborts the signed runner stream and input replay cannot resurrect it',{timeout:20000},async()=>{
- const f=await fixture(false,true);try{await f.call('api/sessions',{});const body={text:'held cancellation fixture',operationId:'cloudflare-stop-operation'};const receipt=await f.call('api/submit',body);await f.entered;await f.ready();await f.call('api/abort',{});assert.equal((await f.call('__test/settle?op='+body.operationId)).status,'unanswered');await Promise.race([f.canceled,new Promise((_,reject)=>setTimeout(()=>reject(Error('Runner cancellation did not arrive')),2000))]);assert.equal(f.bodies.length,1);assert.equal(f.journal.rounds.size,1);assert.deepEqual(await f.call('api/submit',body),receipt);assert.equal(f.wire.length,1);}finally{await f.dispose();}
+ const f=await fixture(false,true);try{
+  await f.call('api/sessions',{});
+  const body={text:'held cancellation fixture',operationId:'cloudflare-stop-operation'};
+  const receipt=await f.call('api/submit',body);await f.entered;await f.ready();
+  await f.call('api/abort',{});
+  assert.equal((await f.call('__test/settle?op='+body.operationId)).status,'unanswered');
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  try{await Promise.race([f.canceled,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Runner cancellation did not arrive')),2000);})]);}finally{clearTimeout(timer);}
+  assert.equal(f.bodies.length,1);assert.equal(f.journal.rounds.size,1);
+  const rounds=await f.call('__test/rounds');assert.equal(rounds.length,1);
+  assert.equal((await f.call('api/events?snapshot=1')).busy,false);
+  assert.deepEqual(await f.call('api/submit',body),receipt);assert.equal(f.wire.length,1);
+  assert.deepEqual(await f.call('__test/rounds'),rounds);
+  assert.ok(f.observed('provider.abort'));assert.ok(f.observed('provider.body.cancel'));
+  assert.ok(!f.observed('api.socket.end')&&!f.observed('api.socket.error'),'API connection closed before fixture disposal: '+JSON.stringify(f.events));
+  await f.restart();
+  assert.deepEqual(await f.call('api/submit',body),receipt);assert.deepEqual(await f.call('__test/rounds'),rounds);
+  assert.equal(f.wire.length,1);assert.equal(f.bodies.length,1);assert.equal(f.journal.rounds.size,1);
+ }finally{await f.dispose();}
 });
