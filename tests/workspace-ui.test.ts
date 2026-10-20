@@ -35,3 +35,18 @@ test('cached page restoration resumes one workspace polling timer and refreshes 
  const panel=workspacePanel({document:w.document,api:async()=>{reads++;return {};},currentSession:()=> '1'});
  try{await panel.configure({workspaceEnabled:true});assert.equal(timers.size,1);w.dispatchEvent(new w.PageTransitionEvent('pagehide',{persisted:true}));assert.equal(timers.size,0);const before=reads;w.dispatchEvent(new w.PageTransitionEvent('pageshow',{persisted:true}));await new Promise(r=>setTimeout(r,0));assert.equal(timers.size,1);assert.ok(reads>before);w.dispatchEvent(new w.PageTransitionEvent('pageshow',{persisted:true}));assert.equal(timers.size,1);}finally{w.dispatchEvent(new w.Event('pagehide'));dom.window.close();}
 });
+
+test('workspace stop and deadline controls name their scope and only extend an active command',async()=>{
+ const dom=new JSDOM(await readFile('public/index.html','utf8'),{url:'https://chat.example.test'}),d=dom.window.document;
+ let state:any={id:'a'.repeat(36),phase:'ready',active:'run',deadline:Date.UTC(2026,9,20,18),runs:{run:{state:'running',deadline:Date.UTC(2026,9,20,17,30)}},gaps:[]};
+ const calls:any[]=[];const panel=workspacePanel({document:d,currentSession:()=> '1',api:async(path:string,body:any)=>{calls.push({path,body});return path==='/api/workspaces?session=1'?{workspaceId:state.id}:state;}});
+ try{
+  await panel.configure({workspaceEnabled:true,workspaceRepository:'owner/project'});
+  assert.match(d.getElementById('workspace-cancel')!.textContent!,/Stop workspace/);assert.match(d.getElementById('workspace-cancel')!.title,/active command/);
+  assert.match(d.getElementById('workspace-deadline')!.textContent!,/^Workspace stops at/);assert.match(d.getElementById('workspace-run')!.textContent!,/^Command running · stops at/);
+  assert.notEqual(d.getElementById('workspace-deadline')!.textContent!.split('at ')[1],d.getElementById('workspace-run')!.textContent!.split('at ')[1]);
+  assert.match(d.getElementById('workspace-extend-task')!.textContent!,/Workspace \+30 min/);assert.match(d.getElementById('workspace-extend-task')!.title,/command deadline is unchanged/);
+  assert.equal((d.getElementById('workspace-extend-command') as HTMLButtonElement).disabled,false);await (d.getElementById('workspace-extend-command') as any).onclick();assert.deepEqual(calls.at(-1).body,{target:'command',minutes:30});
+  state={...state,active:undefined,runs:{run:{state:'done',exitCode:0}}};await panel.refresh();assert.equal((d.getElementById('workspace-extend-command') as HTMLButtonElement).disabled,true);assert.match(d.getElementById('workspace-extend-command')!.title,/No active command/);
+ }finally{dom.window.dispatchEvent(new dom.window.Event('pagehide'));dom.window.close();}
+});

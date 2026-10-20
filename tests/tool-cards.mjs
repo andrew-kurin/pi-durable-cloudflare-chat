@@ -456,8 +456,8 @@ try {
     assert.match(
       await row.locator("summary").textContent(),
       process === "not_found"
-        ? /Requested process not found/
-        : /No active process/,
+        ? /Requested command not found/
+        : /No active command/,
     );
     if (mode === "automatic")
       assert.match(
@@ -546,7 +546,7 @@ try {
     assert.ok(
       (await page.locator(".tool-row>summary").textContent()).includes(label),
     );
-    assert.equal(await page.locator(".tool-state").textContent(), "Checked");
+    assert.equal(await page.locator(".tool-state").textContent(), "Status checked");
     if (outcome === "still_running")
       assert.match(
         await page.locator(".tool-preview").textContent(),
