@@ -60,3 +60,13 @@ test('pause blocks new admission and checkpoint waits for admitted late callback
  const f=fixture();t.after(()=>f.db.close());f.env.MAINTENANCE_MODE=undefined;let release!:()=>void;const held=new Promise<void>(resolve=>release=resolve);const job=f.gate.withActive(async()=>{await held;f.db.exec('INSERT INTO pi_entries VALUES(11)');});await new Promise(resolve=>setImmediate(resolve));
  await f.gate.pause(epoch);await assert.rejects(f.gate.withActive(async()=>{throw Error('must never dispatch');}),/Maintenance/);await assert.rejects(f.gate.checkpoint(epoch),/still settling/);assert.equal(f.bookmarks(),0);release();await job;const c=(await f.gate.checkpoint(epoch)).checkpoint!;assert.equal(c.history.tail,11);
 });
+test('stale maintenance Stop and cleanup cannot cancel work after successful resume or in another window',async t=>{
+ const f=fixture();t.after(()=>f.db.close());let stops=0,cancels=0;const id='a'.repeat(36);f.data.set('workspace-owner:'+id,'1');f.env.Workspaces={getByName:()=>({maintenanceReport:async()=>({phase:'closed',running:false}),maintenancePause:async()=>{},maintenanceResume:async()=>{},maintenanceBookmark:async()=>'native-stub',request:async()=>{cancels++;}})};const c=await ready(f);
+ const request=(body:any)=>f.gate.handle(new Request('https://chat.test/api/maintenance',{method:'POST',body:JSON.stringify(body)}),{validate:async()=>{},stop:async()=>{stops++;}});
+ await assert.rejects(request({action:'stop',epoch:'older-window'}),/window changed/);await assert.rejects(request({action:'cancel_workspace',epoch:'older-window',workspaceId:id,operationId:'a'.repeat(64)}),/window changed/);
+ await f.gate.resume(epoch,c.id,version,async()=>{});await assert.rejects(request({action:'stop',epoch}),/window changed/);await assert.rejects(request({action:'cancel_workspace',epoch,workspaceId:id,operationId:'a'.repeat(64)}),/window changed/);assert.equal(stops,0);assert.equal(cancels,0);
+});
+test('resume refuses a workspace inventory added after capture without discarding its old checkpoint',async t=>{
+ const f=fixture();t.after(()=>f.db.close());const c=await ready(f),id='b'.repeat(36);f.data.set('workspace-owner:'+id,'1');f.env.Workspaces={getByName:()=>({maintenanceReport:async()=>({phase:'closed',running:false}),maintenancePause:async()=>{},maintenanceResume:async()=>{throw Error('must not activate');},maintenanceBookmark:async()=>'native-stub',request:async()=>{}})};
+ await assert.rejects(f.gate.resume(epoch,c.id,version,async()=>{throw Error('must not open');}),/Saved work changed/);assert.deepEqual(f.data.get('maintenance-checkpoint:v1:'+c.id),c);assert.equal((await f.gate.state())!.phase,'paused');
+});

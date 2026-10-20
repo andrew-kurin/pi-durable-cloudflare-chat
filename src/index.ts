@@ -164,9 +164,7 @@ export class Assistant extends DurableObject<Env> {
     }
     const maintenanceEpoch=await this.maintenance.arrival();
     try {await this.maintenance.assertActive();}catch(error){
-      // Stop may use an already-open cached runtime; it must never reopen Pi.
-      if(!(new URL(request.url).pathname==='/api/abort'&&request.method==='POST'&&this.piOpened))return Response.json({error:'Maintenance is paused. Open /maintenance.'},{status:423});
-      return this.handle(request);
+      return Response.json({error:'Maintenance is paused. Open /maintenance.'},{status:423});
     }
     try {
       await this.harnessRecovery.prepare(() => this.harness.dispose());

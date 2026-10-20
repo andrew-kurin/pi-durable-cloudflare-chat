@@ -59,13 +59,14 @@ export class Maintenance {
   const bookmark=await this.store.getCurrentBookmark();if(typeof bookmark!=='string'||!bookmark)throw Error('Native checkpoint unavailable');
   s.checkpoint={id:crypto.randomUUID(),revision:r.revision,bookmark,capturedAt:Date.now(),history:r.pi.history,workspaces};await this.store.put('maintenance-checkpoint:v1:'+s.checkpoint.id,s.checkpoint);await this.store.put(KEY,s);return this.report();
  });}
+ private matchesCheckpoint(r:Awaited<ReturnType<Maintenance['report']>>,c:Checkpoint){return JSON.stringify(r.pi.history)===JSON.stringify(c.history)&&JSON.stringify(r.workspaces.map(w=>w.id).sort())===JSON.stringify(c.workspaces.map(w=>w.id).sort());}
  resume(epoch:string,checkpointId:string,workerVersion:string,validate:()=>Promise<void>){return this.serial(async()=>{
   const s=await this.state();if(this.env.MAINTENANCE_MODE==='frozen')throw new RequestError(409,'Deploy the active entrypoint before explicit resume; frozen mode never opens Pi');
   if(s?.phase==='active'&&s.epoch===epoch&&s.checkpoint?.id===checkpointId&&workerVersion===(this.env.WORKER_VERSION?.id??'local')&&s.checkpoint.revision===(this.env.SOURCE_REVISION??'local'))return this.report();
   if(!s||s.phase!=='paused'||s.epoch!==epoch||s.checkpoint?.id!==checkpointId||s.checkpoint.revision!==(this.env.SOURCE_REVISION??'local')||workerVersion!==(this.env.WORKER_VERSION?.id??'local'))throw new RequestError(409,'Maintenance checkpoint, revision or serving version changed');
-  const report=await this.report();if(report.blockers.length||JSON.stringify(report.pi.history)!==JSON.stringify(s.checkpoint.history))throw new RequestError(409,'Saved work changed or remains unsettled; remain paused for review');
+  const report=await this.report();if(report.blockers.length||!this.matchesCheckpoint(report,s.checkpoint))throw new RequestError(409,'Saved work changed or remains unsettled; remain paused for review');
   s.phase='validating';await this.store.put(KEY,s);
-  try{this.validation=true;await validate();const checked=await this.report();if(checked.blockers.length||JSON.stringify(checked.pi.history)!==JSON.stringify(s.checkpoint.history))throw Error('Read-only validation changed saved work');await Promise.all(checked.workspaces.map(w=>this.bounded(()=>this.env.Workspaces!.getByName(w.id).maintenanceResume(epoch))));s.phase='active';await this.store.put(KEY,s);return this.report();}
+  try{this.validation=true;await validate();const checked=await this.report();if(checked.blockers.length||!this.matchesCheckpoint(checked,s.checkpoint))throw Error('Read-only validation changed saved work');await Promise.all(checked.workspaces.map(w=>this.bounded(()=>this.env.Workspaces!.getByName(w.id).maintenanceResume(epoch))));s.phase='active';await this.store.put(KEY,s);return this.report();}
   catch(error){s.phase='paused';await this.store.put(KEY,s);throw error;}finally{this.validation=false;}
  });}
  async handle(request:Request,callbacks:{validate:()=>Promise<void>;stop?:(sessions:string[])=>Promise<void>}){
@@ -77,12 +78,12 @@ export class Maintenance {
   if(b.action==='resume'&&typeof b.epoch==='string'&&typeof b.checkpointId==='string'&&typeof b.workerVersion==='string')return Response.json(await this.resume(b.epoch,b.checkpointId,b.workerVersion,callbacks.validate));
   if(b.action==='stop'){
    if(!callbacks.stop)throw new RequestError(409,'Pi is not already open. Frozen maintenance cannot open it to Stop; remain paused for a compatible drain release.');
-   if(!await this.paused())throw new RequestError(409,'Pause admission before draining chat work');
-   const r=await this.report();await callbacks.stop([...new Set([...r.pi.activities,...r.pi.pending].map(a=>String(a.conversation)))]);return Response.json(await this.report());
+   return this.serial(async()=>{const s=await this.state();if(s?.phase!=='paused'||s.epoch!==b.epoch)throw new RequestError(409,'Maintenance window changed; refresh before draining');
+    const r=await this.report();this.inFlight++;try{await callbacks.stop!([...new Set([...r.pi.activities,...r.pi.pending].map(a=>String(a.conversation)))]);}finally{this.inFlight--;}return Response.json(await this.report());});
   }
   if(b.action==='cancel_workspace'&&typeof b.workspaceId==='string'&&typeof b.operationId==='string'){
    if(!await this.store.get('workspace-owner:'+b.workspaceId)||!/^[a-f0-9-]{36}$/.test(b.workspaceId)||!/^[a-f0-9]{64}$/.test(b.operationId)||!this.env.Workspaces)throw new RequestError(400,'Invalid owned workspace cancellation');
-   await this.env.Workspaces.getByName(b.workspaceId).request({action:'cancel',workspaceId:b.workspaceId,operationId:b.operationId});return Response.json(await this.report());
+   const {workspaceId,operationId}=b;return this.serial(async()=>{const s=await this.state();if(s?.phase!=='paused'||s.epoch!==b.epoch)throw new RequestError(409,'Maintenance window changed; refresh before cancellation');await this.bounded(()=>this.env.Workspaces!.getByName(workspaceId).request({action:'cancel',workspaceId,operationId}));return Response.json(await this.report());});
   }
   throw new RequestError(400,'Invalid maintenance action');
  }
