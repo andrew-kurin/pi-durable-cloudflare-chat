@@ -14,3 +14,15 @@ test('pending submissions preserve edited drafts and drafts in another conversat
   resolveSubmit();await submitted;assert.equal(input.value,change==='edited'?'Newer draft':change==='switched'?'Other conversation draft':'');assert.equal(w.document.querySelector('[data-session-id="1"]').textContent,'Intentional title');dom.window.close();
  }
 });
+
+test('full titles remain available as inert text in existing chat details and history actions after title updates',async()=>{
+ const html=await readFile('public/index.html','utf8'),script=(await readFile('public/app.js','utf8')).replace(/^import .*\n/gm,'');
+ const dom=new JSDOM(html,{url:'https://chat.example.test',runScripts:'outside-only'}),w=dom.window as any;let stream:any;
+ const title='A complete long conversation title with recovery details beyond the clipped row';
+ w.createChatSession=(o:any)=>createChatSession({...o,platform:w});w.historyPresentation=historyPresentation;w.createHistoryClient=(o:any)=>createHistoryClient({...o,platform:w});w.renderMarkdown=renderMarkdown;w.toolActivity=toolActivity;
+ w.EventSource=class{constructor(){stream=this}close(){}};w.fetch=async(p:string)=>({ok:true,json:async()=>p==='/api/sessions'?[{id:'1',title}]:{connected:true,modelEnabled:true}});
+ try{w.eval(script);await new Promise(r=>setTimeout(r,0));assert.equal(w.document.getElementById('chat-full-title').textContent,title);assert.equal(w.document.querySelector('.chat-menu-title').textContent,title);
+  const updated='<img src=x onerror=attack> A revised complete title';stream.onmessage({data:JSON.stringify({messages:[],partial:'',busy:false,title:updated})});
+  assert.equal(w.document.getElementById('chat-full-title').textContent,updated);assert.equal(w.document.querySelector('.chat-menu-title').textContent,updated);assert.equal(w.document.querySelector('#chat-info img,.chat-menu img'),null);
+ }finally{w.dispatchEvent(new w.Event('pagehide'));w.close();}
+});
