@@ -3,6 +3,7 @@ import { MAX_REQUEST_BYTES, type RoundJournal } from './core';
 import { RUNNER_PATH, sha256, siwcPayload, verifyRound } from '../../src/model-runner-protocol';
 import { validatedStream } from './live-stream';
 import { diagnosticText, emitDiagnostic, providerError, type Diagnostic } from './diagnostics';
+import { providerFailureInfo, type ProviderFailureInfo } from '../../src/model-runner-error';
 export class RunnerFailure extends Error { constructor(readonly code: string) { super(code); } }
 export interface LiveRunnerOptions {
   key: CryptoKey;
@@ -15,7 +16,7 @@ export interface LiveRunnerOptions {
   diagnostic?: Diagnostic;
   version?: string;
 }
-const failure = (status: number, code: string) => Response.json({ error: { code, message: code } }, { status, headers: { 'cache-control': 'no-store' } });
+const failure = (status: number, code: string, provider?: ProviderFailureInfo) => Response.json({ error: { code, message: code, ...(provider ? { provider } : {}) } }, { status, headers: { 'cache-control': 'no-store' } });
 export async function interrupted<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const stop = () => reject(new RunnerFailure('round_cancelled'));
@@ -67,15 +68,18 @@ export function createSiwcRunner(options: LiveRunnerOptions) {
     log({outcome:'response',httpStatus:response.status,requestId:diagnosticText(response.headers.get('x-request-id')),contentType:diagnosticText(response.headers.get('content-type'))});
     const media = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
     if (!response.ok || !response.body || (media && media !== 'text/event-stream')) {
+      let provider = providerFailureInfo(response.status, undefined);
       // Only bounded technical error fields; never log an inference success body.
       if (!response.ok && response.body) {
         const reader=response.body.getReader();let text='',size=0;
-        try { while(size<=8192) {const p=await interrupted(reader.read(),controller.signal);if(p.done)break;size+=p.value.length;if(size>8192)break;text+=new TextDecoder().decode(p.value);}if(size<=8192){try{const parsed=JSON.parse(text);log({outcome:'provider_error',httpStatus:response.status,error:providerError(parsed.error)});}catch{log({outcome:'provider_error',httpStatus:response.status,errorBody:diagnosticText(text)});}} }
+        try { while(size<=8192) {const p=await interrupted(reader.read(),controller.signal);if(p.done)break;size+=p.value.length;if(size>8192)break;text+=new TextDecoder().decode(p.value);}if(size<=8192){try{const parsed=JSON.parse(text);provider=providerFailureInfo(response.status,parsed.error);log({outcome:'provider_error',httpStatus:response.status,error:providerError(parsed.error)});}catch{log({outcome:'provider_error',httpStatus:response.status,errorBody:diagnosticText(text)});}} }
         catch { log({outcome:'provider_error_unavailable',httpStatus:response.status}); }
         finally { void reader.cancel().catch(()=>{}); }
       } else void response.body?.cancel().catch(() => {}); finish();
       const code = response.status === 401 ? 'siwc_reauthorization_required' : response.status === 403 ? 'siwc_access_denied' : response.status === 429 ? 'siwc_usage_limited' : 'siwc_provider_rejected';
-      return failure(502, code);
+      // Preserve definitive input rejections as an application 400 response;
+      // wrapping them in 502 can lose the JSON envelope at the gateway.
+      return failure(response.status === 400 ? 400 : 502, code, provider);
     }
     stage='stream';
     return new Response(validatedStream(response.body, controller.signal, finish, abort,log), { headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-pi-round-id': id } });

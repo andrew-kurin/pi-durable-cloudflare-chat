@@ -138,15 +138,15 @@ export class ChatProjection {
     if (entry.kind === "pi.user") this.failed = false;
     else if (modelError) this.failed = true;
     else if (entryText(entry).trim()) this.failed = false;
-    const errorMessage = entry.model
+    const failedMessage = entry.model
       ?.filter((m) => m.role === "assistant")
-      .find((m) => m.stopReason === "error")?.errorMessage;
+      .find((m) => m.stopReason === "error");
     const item = {
       ...(modelError
         ? {
             failure: {
               kind: "model" as const,
-              diagnostic: modelErrorInfo(errorMessage),
+              diagnostic: modelErrorInfo(failedMessage?.errorMessage, failedMessage?.diagnostics),
               recoveryAction: "check-status" as const,
             },
           }
@@ -156,11 +156,7 @@ export class ChatProjection {
       text: modelError
         ? this.failureText +
           " " +
-          modelErrorDiagnostic(
-            entry.model
-              ?.filter((m) => m.role === "assistant")
-              .find((m) => m.stopReason === "error")?.errorMessage,
-          )
+          modelErrorDiagnostic(failedMessage?.errorMessage, failedMessage?.diagnostics)
         : entryText(entry),
     };
     const at = this.messages.findIndex((m) => m.id === item.id);

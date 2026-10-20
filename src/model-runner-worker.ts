@@ -1,9 +1,9 @@
 import {technicalError} from './error-log';
 import { createProvider } from '@earendil-works/pi-ai/models';
-import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
+import { siwcRunnerModels } from './model-runner-models';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
 import type { AssistantMessage, ProviderStreams } from '@earendil-works/pi-ai';
-import { RUNNER_MODELS, sha256, transportKey } from './model-runner-protocol';
+import { sha256, transportKey } from './model-runner-protocol';
 import { createSiwcRunnerProvider } from './model-runner-siwc-client';
 export interface RunnerConfig {
  ENABLE_MODEL_RUNNER?: string;
@@ -77,7 +77,7 @@ export function createWorkerRunnerProvider(config: RunnerConfig, store: Store, n
  };
  return createProvider({ id: 'model-runner-siwc', name: 'SIWC model runner', baseUrl: 'https://model-runner.invalid/v1',
   auth: { apiKey: { name: 'Runner transport', resolve: async () => ({ auth: { apiKey: 'runner-transport-only' } }) } },
-  models: openaiProvider().getModels().filter(m => RUNNER_MODELS.includes(m.id as any)).map(m => ({ ...m, api: 'openai-responses', provider: 'model-runner-siwc', baseUrl: 'https://model-runner.invalid/v1' })),
+  models: siwcRunnerModels(),
   api: { stream: wrap('stream'), streamSimple: wrap('streamSimple') },
  });
 }

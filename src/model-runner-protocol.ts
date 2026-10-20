@@ -31,7 +31,7 @@ export async function verifyRound(key: CryptoKey, request: Request, body: string
  * Unsupported tuning/state options are deliberately omitted. No tool execution. */
 export function siwcPayload(raw: unknown): Record<string, unknown> {
   const p = raw as Record<string, any>;
-  if (!p || !RUNNER_MODELS.includes(p.model) || !Array.isArray(p.input) || p.input.some((x: any) => !x || typeof x !== 'object' || x.role === 'system')) throw Error('Invalid SIWC input');
+  if (!p || !RUNNER_MODELS.includes(p.model) || !Array.isArray(p.input) || p.input.some((x: any) => !x || typeof x !== 'object' || x.role === 'system' || x.type === 'configuration_update')) throw Error('Invalid SIWC input');
   const validTool = (t: any): boolean => !!t && (t.type === 'function' || t.type === 'custom') && typeof t.name === 'string' && t.name.length > 0;
   if (p.tools !== undefined && (!Array.isArray(p.tools) || !p.tools.every(validTool))) throw Error('Unsupported SIWC tools');
   for (const item of p.input) if (item.type === 'additional_tools' && (!Array.isArray(item.tools) || !item.tools.every(validTool))) throw Error('Unsupported SIWC tools');

@@ -1,15 +1,41 @@
+import { RUNNER_FAILURE_CODES, savedRunnerFailure } from './model-runner-error';
 /** Classify an existing provider error locally. Never forward its raw text or payload. */
 export interface ModelErrorInfo {
   category: string;
   httpStatus?: string;
   code?: string;
+  providerHttpStatus?: string;
+  providerCode?: string;
+  providerParam?: string;
 }
 export interface SavedFailure {
   kind: "model";
   diagnostic: ModelErrorInfo;
   recoveryAction: "check-status";
 }
-export function modelErrorInfo(raw: unknown): ModelErrorInfo {
+function runnerErrorInfo(failure: NonNullable<ReturnType<typeof savedRunnerFailure>>): ModelErrorInfo {
+  const { code, httpStatus, provider } = failure;
+  if (code === 'runner_gateway_browser_integrity_blocked')
+    return { category: 'runner gateway browser integrity check', httpStatus: '403', code: 'cloudflare_1010' };
+  const category = provider?.code === 'subscription_sharing_unsupported_capability' ? 'subscription input capability rejected'
+    : code === 'runner_http_rejected' ? 'runner HTTP rejection'
+    : code === 'siwc_provider_rejected' ? 'provider request rejected'
+    : ['siwc_reauthorization_required', 'siwc_refresh_resolution_required', 'siwc_refresh_deferred', 'siwc_credential_invalid'].includes(code) ? 'authentication or subscription credentials'
+    : code === 'siwc_access_denied' ? 'access denied'
+    : code === 'siwc_usage_limited' ? 'rate or usage limit'
+    : code === 'runner_input_limit' ? 'runner input size limit'
+    : ['unsupported_siwc_request', 'runner_contract_rejected'].includes(code) ? 'runner request protocol'
+    : code === 'runner_stream_interrupted' ? 'response stream protocol'
+    : ['round_conflict', 'round_already_reserved', 'worker_round_conflict', 'worker_round_already_reserved'].includes(code) ? 'model round dispatch fence'
+    : 'model runner failure';
+  return { category, code,
+    ...(httpStatus === undefined ? {} : { httpStatus: String(httpStatus) }),
+    ...(provider ? { providerHttpStatus: String(provider.httpStatus), ...(provider.code ? { providerCode: provider.code } : {}), ...(provider.param ? { providerParam: provider.param } : {}) } : {}),
+  };
+}
+export function modelErrorInfo(raw: unknown, diagnostics?: unknown): ModelErrorInfo {
+  const failure = savedRunnerFailure(diagnostics);
+  if (failure) return runnerErrorInfo(failure);
   if (typeof raw !== "string" || raw.length > 65536)
     return { category: "unclassified saved model error" };
   if (raw === "Model round failed (runner gateway browser integrity blocked); automatic replay disabled.")
@@ -20,6 +46,10 @@ export function modelErrorInfo(raw: unknown): ModelErrorInfo {
     return { category: "runner request protocol", code: "unsupported_siwc_request" };
   if (raw === "Model round failed (runner stream interrupted); automatic replay disabled.")
     return { category: "response stream protocol", code: "runner_stream_interrupted" };
+  // Older saved messages may have the fixed runner text without diagnostics.
+  const runnerCode = raw.match(/^Model round failed \(([a-z ]+)\); automatic replay disabled\.$/)?.[1].replaceAll(' ', '_');
+  if ((RUNNER_FAILURE_CODES as readonly unknown[]).includes(runnerCode))
+    return runnerErrorInfo({ code: runnerCode as typeof RUNNER_FAILURE_CODES[number] });
   const status = raw.match(
     /^(?:[A-Za-z][A-Za-z ]{0,40} \()?([45]\d\d)\)?(?:\s*:|\s+status code\b)/,
   )?.[1];
@@ -115,13 +145,16 @@ export function modelErrorInfo(raw: unknown): ModelErrorInfo {
     ...(code ? { code } : {}),
   };
 }
-export function modelErrorDiagnostic(raw: unknown): string {
-  const info = modelErrorInfo(raw);
+export function modelErrorDiagnostic(raw: unknown, diagnostics?: unknown): string {
+  const info = modelErrorInfo(raw, diagnostics);
   return (
     "Diagnostic hint: " +
     info.category +
     "." +
     (info.httpStatus ? " Reported HTTP " + info.httpStatus + "." : "") +
-    (info.code ? " Reported code: " + info.code + "." : "")
+    (info.code ? " Reported code: " + info.code + "." : "") +
+    (info.providerHttpStatus ? " Provider HTTP " + info.providerHttpStatus + "." : "") +
+    (info.providerCode ? " Provider code: " + info.providerCode + "." : "") +
+    (info.providerParam ? " Provider parameter: " + info.providerParam + "." : "")
   );
 }
