@@ -66,3 +66,5 @@ html[data-short-viewport=true] #form textarea{max-height:calc(var(--visible-heig
 .chat-menu-title{font-size:13px;font-weight:600;line-height:1.45;overflow-wrap:anywhere;margin:6px 8px 10px;color:#172b26}
 a:focus-visible{outline:3px solid #245e4a;outline-offset:3px}
 #form:has(textarea:focus-visible){outline:3px solid #245e4a;outline-offset:2px}
+
+.tool-context.tool-context-compact{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;-webkit-line-clamp:1}
