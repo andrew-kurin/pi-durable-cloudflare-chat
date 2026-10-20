@@ -89,9 +89,11 @@ export function toolActivity(document, tools, expanded, onToggle) {
       const state = document.createElement("span");
       state.className = "tool-state";
       state.textContent =
-        label.textContent === "Wait for command" && tool.state === "success"
-          ? "Checked"
-          : states[tool.state];
+        tool.state === "success" && ["Workspace status", "Process status", "Wait for command"].includes(label.textContent)
+          ? "Status checked"
+          : tool.state === "success" && label.textContent === "Start command"
+            ? "Request accepted"
+            : states[tool.state];
       summary.append(label, state);
       if (typeof tool.context === "string" && tool.context) {
         const context = document.createElement("span");
@@ -134,21 +136,8 @@ export function toolActivity(document, tools, expanded, onToggle) {
       };
       if (typeof tool.input === "string" && tool.input)
         section("Input", tool.input.slice(0, 4000), tool.inputTruncated);
-      if (typeof tool.output === "string")
-        section(
-          "Output",
-          tool.output.slice(0, 12000) || "No text output.",
-          tool.outputTruncated,
-        );
-      else {
-        const empty = document.createElement("p");
-        empty.className = "tool-legacy";
-        empty.textContent =
-          tool.state === "running" || tool.state === "pending"
-            ? "Output will appear when recorded."
-            : "No output text is available in this saved record.";
-        evidence.append(empty);
-      }
+      if (typeof tool.output === "string" && tool.output.length)
+        section("Output", tool.output.slice(0, 12000), tool.outputTruncated);
       const sources = Array.isArray(tool.sources)
         ? tool.sources.slice(0, 5)
         : [];
@@ -166,11 +155,15 @@ export function toolActivity(document, tools, expanded, onToggle) {
             : new URL(url).hostname;
         evidence.append(a);
       }
-      const detail = document.createElement("p");
-      detail.className = "tool-detail";
-      detail.textContent =
-        typeof tool.detail === "string" ? tool.detail.slice(0, 500) : "";
-      evidence.append(detail);
+      const normalize = text => text.replace(/\s+/g, " ").trim();
+      const rawDetail = typeof tool.detail === "string" ? tool.detail.slice(0, 500) : "";
+      const detailText = rawDetail.replace(/^(?:Completed\.|Failed\.|Working…|Waiting to start\.)\s*/, "");
+      if (detailText && ![preview.textContent, tool.summary, tool.output].some(text => typeof text === "string" && (normalize(text) === normalize(rawDetail) || normalize(text) === normalize(detailText)))) {
+        const detail = document.createElement("p");
+        detail.className = "tool-detail";
+        detail.textContent = detailText;
+        evidence.append(detail);
+      }
       summary.addEventListener("click", () => onToggle(tool.id, !row.open));
       row.append(summary, evidence);
       row.addEventListener("toggle", () => onToggle(tool.id, row.open));

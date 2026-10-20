@@ -380,6 +380,19 @@ export function resultSummary(
     else if (typeof record.text === "string")
       summary = safeMetadata(record.text, 220);
   }
+  const activeRun = record?.active && record.runs && typeof record.runs === "object"
+    ? (record.runs as Record<string, any>)[String(record.active)] : undefined;
+  const requestedProcess = record?.process as {state?:string;exitCode?:number} | undefined;
+  const process = requestedProcess?.state && requestedProcess.state !== "none" ? requestedProcess : activeRun ?? requestedProcess;
+  const processSummary = process?.state === "done"
+    ? process.exitCode === 0 ? "Command completed (exit 0)." : Number.isInteger(process.exitCode) ? "Command exited with code " + process.exitCode + "." : "Command ended; exit code unavailable."
+    : process?.state === "running" ? "Command running."
+    : process?.state === "dispatching" ? "Command accepted; starting."
+    : process?.state === "interrupted" ? "Command interrupted; completion unconfirmed."
+    : process?.state === "not_found" ? "Requested command not found."
+    : process?.state === "none" ? "No active command." : "";
+  if (_name === "workspace_exec" && record && !record.error)
+    summary = processSummary || "Request accepted; command completion unconfirmed.";
   if (
     _name === "workspace_status" &&
     record &&
@@ -388,18 +401,11 @@ export function resultSummary(
     )
   ) {
     const mode = (record.activation as any)?.mode;
-    const process = (record.process as any)?.state;
     summary =
       "Workspace " +
       record.phase +
       ". " +
-      (process === "none"
-        ? "No active process. "
-        : process === "not_found"
-          ? "Requested process not found. "
-          : ["running", "dispatching", "done", "interrupted"].includes(process)
-            ? "Process " + process + ". "
-            : "") +
+      (processSummary ? processSummary + " " : "") +
       (mode === "automatic"
         ? "New project work activates automatically."
         : mode === "owner_open"
@@ -445,9 +451,11 @@ export function resultSummary(
     summary:
       (freshness ? freshness + " " : "") +
       (summary ||
+        (_name === "workspace_read" && record?.text === "" ? "Empty file." :
+         _name === "workspace_logs" && record?.text === "" ? "No log output recorded." :
         (state === "success"
           ? "Completed with no text output."
-          : stateDetail(state))),
+          : stateDetail(state)))),
     output: output.text,
     ...(value.truncated || output.truncated ? { outputTruncated: true } : {}),
     ...(sources.length ? { sources } : {}),
