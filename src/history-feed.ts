@@ -137,6 +137,17 @@ export class HistoryFeed {
           }, 55000);
           request.signal.addEventListener("abort", onAbort, { once: true });
           if (request.signal.aborted) void stop();
+          void source.closed?.then(async end => {
+            if (ended) return;
+            if (end.reason === 'session_failed') {
+              projection!.sessionFailed();
+              dirty = true;
+            }
+            await stop();
+          }).catch(error => {
+            logTechnicalError('request', error, crypto.randomUUID());
+            void stop();
+          });
           if (!ended) source.start(async (batch) => {
             for (const event of batch) {
               if (ended) return;

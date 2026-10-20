@@ -49,10 +49,13 @@ export class WorkspaceController {
   if(prior){if(prior.fingerprint!==fingerprint)throw Error('Operation ID already used');if(request.action==='exec'){await this.poll(s);await this.enforce(s);await this.save(s);return this.summary(s)}if(prior.result!==undefined)return prior.result;throw Error('Previous operation is interrupted; it was not replayed')}
   if(request.action==='status'){await this.poll(s);await this.enforce(s);await this.save(s);return this.summary(s)}
   if(request.action==='logs'){if(!s.runs[request.runId])throw Error('Unknown run');return {runId:request.runId,stream:request.stream,text:await this.store.get<string>(`log:${request.runId}:${request.stream}`)??(s.phase==='ready'?await this.io(signal=>this.adapter.logs(request.runId,request.stream,signal)):'Log unavailable after container stop.')}}
-  await this.store.put(key,{fingerprint});
+  // Export readiness is checked in this serial section before reserving its ID.
+  // Once collection can start, all failures must retain the durable replay fence.
+  if(request.action!=='export')await this.store.put(key,{fingerprint});
   if(request.action==='cancel'){if(request.runId&&request.runId!==s.active)throw Error('Run is not active');s.stopReason='cancelled';await this.save(s);await this.beginStop(s);const result=this.summary(s);await this.store.put(key,{fingerprint,result});return result}
   if(s.phase!=='ready')throw Error('Workspace is not active; create a new task explicitly');await this.poll(s);await this.enforce(s);if(s.phase!=='ready')throw Error('Workspace deadline reached');
   if(s.active&&request.action!=='export')throw Error('Wait for the active serial command before reading/editing/running');
+  if(request.action==='export'){if(s.active){await this.save(s);throw Error('Wait for the command before exporting a consistent patch')}await this.store.put(key,{fingerprint});}
   s.lastUsed=this.now();let result:unknown;
   try{
    if(request.action==='read')result={path:projectPath(request.path),text:await this.io(signal=>this.adapter.read(projectPath(request.path),signal))};
@@ -64,7 +67,7 @@ export class WorkspaceController {
     const run:WorkspaceRun={id:request.operationId,state:'dispatching',command:request.argv[0].slice(0,80),startedAt:this.now(),deadline:Math.min(s.deadline,this.now()+limit)};s.untouched=false;s.runs[run.id]=run;s.active=run.id;await this.save(s); // durable ID BEFORE dispatch
     try{await this.io(signal=>this.adapter.dispatch(run.id,request.argv,projectPath(request.cwd??'.'),signal));run.state='running'}catch{run.state='interrupted';run.reason='Dispatch was ambiguous; command was not replayed.';s.gaps.push(run.reason);await this.beginStop(s)}result=this.summary(s);
    }
-   if(request.action==='export'){if(s.active)throw Error('Wait for the command before exporting a consistent patch');result=await this.export(s,request.operationId);}
+   if(request.action==='export')result=await this.export(s,request.operationId);
   }catch(error){await this.save(s);throw error}
   await this.save(s);await this.store.put(key,{fingerprint,result});return result;
  })}

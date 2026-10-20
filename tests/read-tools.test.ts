@@ -20,7 +20,7 @@ function harness(env=enabled,handler:(url:string,init:RequestInit)=>Response|Pro
  async function run(name:string,args:any,id=crypto.randomUUID(),signal?:AbortSignal){const api={memo:async(name:string,a:any,b?:any)=>{const key=id+':'+name;if(b!==undefined&&!memos.has(key))memos.set(key,a);return memos.get(key);}};return (tools.find(t=>t.name===name)!.execute as any)(args,api,{abortSignal:signal});}
  return {storage,calls,tools,run,advance:(ms:number)=>time+=ms};
 }
-function output(r:any){return r.content[0].text;}
+function output(r:any){return r.output[0].text;}
 test('public URL validation blocks IP/local, alternate IP notation, credentials and signed URLs',()=>{
  for(const url of ['http://example.com','https://127.1','https://0x7f000001','https://[::1]','https://169.254.169.254/latest','https://internal','https://localhost.foo','https://127.0.0.1.nip.io','https://example.com/%73k-secretValue','https://foo.local','https://foo.home.arpa','https://u:p@example.com','https://example.com:444','https://example.com/?api_key=x','https://example.com/?X-Amz-Signature=x','https://example.com/?session=x'])assert.throws(()=>publicUrl(url),url);
  assert.equal(publicUrl('https://example.com/doc?q=workers#x'),'https://example.com/doc?q=workers');
@@ -83,4 +83,11 @@ test('key whitespace is normalized server-side, while assignments/quotes/control
 test('future diagnostics distinguish authentication, transport and invalid JSON without raw errors',async()=>{
  const cases:[[number|string,string],...Array<[number|string,string]>]=[[401,'authentication rejected'],['throw','transport failed'],['json','Unexpected provider JSON']];
  for(const [kind,label] of cases){const h=harness(enabled,()=>{if(kind==='throw')throw new Error('secret-network-detail');if(kind==='json')return new Response('bad-secret-json',{headers:{'Content-Type':'application/json'}});return new Response('secret-http-body',{status:kind as number});});const out=output(await h.run('web_search',{query:'public'}));assert.ok(out.includes(label));assert.doesNotMatch(out,/secret-network|secret-http|bad-secret/);}
+});
+
+test('legacy read cache content is normalized on cache hit without a provider call or new reservation',async()=>{
+ const h=harness(),args={kind:'repositories',query:'legacy public cache'};
+ const hash=Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(['github_search',args])))).toString('hex');
+ await h.storage.put('tools:cache:'+hash.slice(0,2),{hash,expires:Date.UTC(2026,9,11)+60000,result:{content:[{type:'text',text:'legacy cached output'}]}});
+ const result=await h.run('github_search',args);assert.deepEqual(result,{output:[{type:'text',text:'legacy cached output'}]});assert.equal(h.calls.length,0);assert.equal(await h.storage.get('tools:github:hour'),undefined);
 });

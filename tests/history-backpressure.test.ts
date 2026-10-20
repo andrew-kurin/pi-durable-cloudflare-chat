@@ -22,6 +22,8 @@ const terminal = [
 
 function fixture(t: TestContext) {
   let receive!: (batch: AgentEvent[]) => Promise<void>;
+  let endSource!: (end: { reason: string; error?: Error }) => void;
+  const closed = new Promise<{ reason: string; error?: Error }>(resolve => { endSource = resolve; });
   let stops = 0;
   let entries = async () => ({ items: history });
   let start = () => {};
@@ -31,6 +33,7 @@ function fixture(t: TestContext) {
   const feed = new HistoryFeed({
     session: () => ({ events: async () => ({
       snapshot,
+      closed,
       start: (callback: typeof receive) => { receive = callback; start(); },
       stop: async () => { stops++; },
     }) }),
@@ -67,6 +70,7 @@ function fixture(t: TestContext) {
     emit: (batch: AgentEvent[]) => receive(batch),
     replayWith: (read: typeof entries) => { entries = read; },
     onStart: (fn: typeof start) => { start = fn; },
+    endSource: async (end: { reason: string; error?: Error }) => { endSource(end); await closed; },
     inspect: () => ({
       active: (feed as any).activeStreams, leases: (feed as any).streamStops.size, stops,
       removed: removed.mock.calls.filter(c => c.arguments[0] === 'abort').length,
@@ -214,4 +218,63 @@ test('synchronous source setup failure clears the lease and timer exactly once',
   f.abort.abort();
   t.mock.timers.tick(55000);
   assert.deepEqual(f.inspect(), released);
+});
+
+test('session failure releases an unread stream immediately and drains one safe final frame after the initial history', async t => {
+  const f = fixture(t);
+  const response = await f.open();
+  for (let i = 0; i < 2000; i++) await f.emit([update(i)]);
+  await f.endSource({ reason: 'session_failed', error: Error('SECRET_STORAGE_CAUSE') });
+  assert.deepEqual(f.inspect(), released, 'source and lease release before the reader resumes');
+  assert.equal(f.queuedFrames(), 1);
+  assert.equal(f.serializedSizes.length, 1, 'the final frame is not encoded while the queue is full');
+  const reader = f.reader(response);
+  const initial = await readFrame(reader);
+  assert.equal(initial.messages.length, 64);
+  assert.equal(initial.busy, true);
+  const latest = await readFrame(reader);
+  assert.equal(latest.messages.length, 64);
+  assert.equal(latest.failureState.kind, 'session');
+  assert.equal(latest.busy, false);
+  assert.equal(latest.partial, '');
+  assert.match(latest.activity, /Reload saved history/);
+  assert.doesNotMatch(JSON.stringify(latest), /SECRET_STORAGE_CAUSE/);
+  assert.equal((await reader.read()).done, true);
+  await f.emit([update(9999)]);
+  assert.equal(f.serializedSizes.length, 2);
+  assert.deepEqual(f.inspect(), released);
+});
+
+test('late session failure after cancellation cannot revive or serialize the discarded pending history', async t => {
+  const f = fixture(t);
+  const response = await f.open();
+  await f.emit([update(1)]);
+  await response.body!.cancel();
+  await f.endSource({ reason: 'session_failed' });
+  await f.emit([update(2)]);
+  assert.deepEqual(f.inspect(), released);
+  assert.equal(f.serializedSizes.length, 1);
+});
+
+test('session failure during asynchronous snapshot replay retains the safe final state and ignores the late snapshot', async t => {
+  const f = fixture(t);
+  const response = await f.open();
+  let release!: (value: { items: typeof history }) => void;
+  let entered!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  f.replayWith(() => { entered(); return new Promise(resolve => { release = resolve; }); });
+  const replay = f.emit([snapshot, update(9000)]);
+  await waiting;
+  await f.endSource({ reason: 'session_failed' });
+  assert.deepEqual(f.inspect(), released);
+  release({ items: history });
+  await replay;
+  const reader = f.reader(response);
+  await readFrame(reader);
+  const latest = await readFrame(reader);
+  assert.equal(latest.failureState.kind, 'session');
+  assert.equal(latest.busy, false);
+  assert.equal(latest.partial, '');
+  assert.equal((await reader.read()).done, true);
+  assert.equal(f.serializedSizes.length, 2);
 });

@@ -5,11 +5,12 @@ import { ProviderSessions, createChatModels } from "./provider-sessions";
 import { HistoryFeed } from "./history-feed";
 import { WorkspaceCoordinator } from "./workspace-coordinator";
 import { ChatCatalog } from "./chat-catalog";
-import { RequestError, jsonObject } from "./http-input";
+import { RequestError, discardBody, jsonObject } from "./http-input";
 import { SubmissionAdmission, type ArrivedSubmission } from "./submission-admission";
 import { logTechnicalError } from "./error-log";
 import { DurableObject } from "cloudflare:workers";
 import { PiHarness } from "agents/harness/pi";
+import { HarnessRecovery } from './harness-recovery';
 import { Lifecycle } from "agents/lifecycle";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
@@ -89,8 +90,9 @@ export class Assistant extends DurableObject<Env> {
     );
   }
   private admission: Promise<unknown> = Promise.resolve();
+  private harnessRecovery = new HarnessRecovery();
   harness = new PiHarness({
-    harness: ({ storage, context }) => {
+    harness: async ({ storage, context }) => {
       const registry = createRegistry();
       registry.install(delegation());
       registry.install(compactionLogs(this.env.WORKER_VERSION?.id));
@@ -101,7 +103,7 @@ export class Assistant extends DurableObject<Env> {
           }),
         );
       registry.install(readTools(this.ctx.storage, this.env));
-      return Harness.open(
+      return this.harnessRecovery.observe(await Harness.open(
         storage,
         {
           models: this.models,
@@ -114,7 +116,7 @@ export class Assistant extends DurableObject<Env> {
           },
         },
         context,
-      );
+      ));
     },
     defaults: {
       model: runnerConfigured(this.env) ? { provider: "model-runner-siwc", id: "gpt-6.1-sol" } : { provider: "openai-codex", id: "gpt-6-sol" },
@@ -148,6 +150,12 @@ export class Assistant extends DurableObject<Env> {
       await authorize(request, this.env);
     } catch {
       return new Response("Forbidden", { status: 403 });
+    }
+    try {
+      await this.harnessRecovery.prepare(() => this.harness.dispose());
+    } catch (error) {
+      logTechnicalError('request', error, crypto.randomUUID());
+      return Response.json({error:'Chat storage is unavailable. Retry loading saved history.'},{status:503});
     }
     // Control requests must reach running work even while a mutation awaits I/O.
     if (
@@ -460,8 +468,10 @@ export class Assistant extends DurableObject<Env> {
           await this.chatCatalog.rename(sid, b.title.trim()),
         );
       }
-      if (path === "/api/sessions" && request.method === "POST")
+      if (path === "/api/sessions" && request.method === "POST") {
+        await discardBody(request);
         return Response.json(await this.chatCatalog.create());
+      }
       if (path === "/api/submit" && request.method === "POST") {
         await this.providers.assertCanSubmit(() => this.sessionModel(sid));
         const raw = await request.text();
@@ -485,6 +495,7 @@ export class Assistant extends DurableObject<Env> {
         return Response.json(receipt);
       }
       if (path === "/api/abort" && request.method === "POST") {
+        await discardBody(request);
         return Response.json({ aborted: await this.submissions.stop(sid) });
       }
       if (path === "/api/events/close" && request.method === "POST") {
@@ -506,7 +517,7 @@ export class Assistant extends DurableObject<Env> {
         );
       logTechnicalError("request", error, crypto.randomUUID());
       return Response.json(
-        { error: "Request unavailable. Your saved chat is unchanged." },
+        { error: "Request unavailable. Reload saved history and check workspace status before retrying." },
         { status: 500 },
       );
     }

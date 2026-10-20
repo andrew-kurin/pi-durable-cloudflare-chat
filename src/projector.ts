@@ -35,6 +35,8 @@ export class ChatProjection {
   private entries: { id: string; kind: string; turnId?: string }[] = [];
   private turnId?: string;
   private failed = false;
+  private compactionFailed = false;
+  private storageFailed = false;
   private readonly failureText =
     "Sol could not finish this response. Saved tool results remain available; check workspace status before retrying commands.";
   private tools = new Map<
@@ -107,6 +109,7 @@ export class ChatProjection {
           }
   }
   entry(entry: EntryRecord) {
+    if (entry.kind === 'pi.compaction') this.compactionFailed = false;
     const entryId = String(entry.id);
     if (!this.entries.some((e) => e.id === entryId)) {
       if (entry.kind === "pi.user" || entry.kind === "pi.reset")
@@ -165,13 +168,20 @@ export class ChatProjection {
     else this.messages[at] = item;
   }
   apply(e: AgentEvent) {
+    // Nested tools are not enabled by this app. Their events must never become
+    // transcript rows or publish program output as model-issued tool results.
+    if ('parentToolCallId' in e && e.parentToolCallId !== undefined) return;
     if (e.type === "snapshot") {
       this.messages = [];
       this.entries = [];
       this.turnId = undefined;
       this.failed = false;
+      this.storageFailed = false;
       this.tools.clear();
       e.entries.forEach((x) => this.entry(x));
+      // A prior successful summary in full history must not erase a newer
+      // failure carried by the authoritative live snapshot.
+      this.compactionFailed = !!e.compactionFailure;
       this.partial = {};
       e.generation?.message?.content.forEach((p, i) => {
         if (p.type === "text") this.partial[i] = p.text;
@@ -293,6 +303,18 @@ export class ChatProjection {
       this.failed = true;
       this.activity = this.failureText;
     }
+    if (e.type === 'compaction_end' && e.error !== undefined) this.compactionFailed = true;
+  }
+  sessionFailed() {
+    this.storageFailed = true;
+    this.busy = false;
+    this.partial = {};
+    this.activity = 'Chat storage is unavailable. Reload saved history before continuing; check workspace status before retrying commands.';
+    for (const row of this.tools.values()) if (row.state === 'pending' || row.state === 'running') {
+      row.state = 'unavailable';
+      row.detail = stateDetail(row.state);
+      delete row.summary;
+    }
   }
   view() {
     const messages = this.messages.map((m) => ({
@@ -387,12 +409,13 @@ export class ChatProjection {
       });
     return {
       projectionVersion: 2,
-      failureState: this.failed ? { kind: "model" as const, recoveryAction: "check-status" as const } : null,
+      failureState: this.storageFailed ? {kind:'session' as const,recoveryAction:'check-status' as const} : this.failed ? { kind: "model" as const, recoveryAction: "check-status" as const } : null,
+      compactionFailure: this.compactionFailed ? {recoveryAction:'check-status' as const} : null,
       messages,
       partial: Object.values(this.partial).join(""),
       partialTools,
       busy: this.busy,
-      activity: this.activity,
+      activity: this.activity || (this.compactionFailed ? 'Context compaction failed. Saved history is retained; check status before continuing.' : ''),
     };
   }
 }
