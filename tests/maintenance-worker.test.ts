@@ -18,7 +18,8 @@ const sentinel=`await this.ctx.storage.put('runner-round:v1:preserved',{digest:'
 const read=`async read(){return {tasks:this.ctx.storage.sql.exec('SELECT record FROM pi_tasks ORDER BY id').toArray(),entries:this.ctx.storage.sql.exec('SELECT record FROM pi_entries ORDER BY id').toArray(),receipts:this.ctx.storage.sql.exec('SELECT record FROM pi_submissions ORDER BY id').toArray(),fence:await this.ctx.storage.get('runner-round:v1:preserved'),receipt:await this.ctx.storage.get('admission:1:preserved')}}`;
 
 test('frozen production entrypoint contains no Pi/Agents engine or credential/provider code',async()=>{
- const built=await build({entryPoints:['src/maintenance-worker.ts'],bundle:true,write:false,metafile:true,format:'esm',platform:'browser',external:['node:*','cloudflare:*'],logLevel:'silent'});
+ const built=await build({entryPoints:['src/maintenance-worker.ts'],define:{PI_DEPLOYMENT_MODE:JSON.stringify('frozen:revision-bound')},bundle:true,write:false,metafile:true,format:'esm',platform:'browser',external:['node:*','cloudflare:*'],logLevel:'silent'});
+ assert.ok(built.outputFiles[0].text.includes('frozen:revision-bound'),'frozen artifact retains the revision marker so code updates refresh DO bindings');
  assert.deepEqual(Object.keys(built.metafile!.inputs).filter(p=>/node_modules\/(?:agents|@earendil-works)|src\/(?:credentials|provider-sessions|model-runner)/.test(p)),[]);
 });
 test('actual frozen Worker auth, alarm/restart and stale requests never migrate/resume the real Pi 1.1 crash image',{timeout:30000},async()=>{
