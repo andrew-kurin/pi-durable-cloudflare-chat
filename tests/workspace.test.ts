@@ -17,6 +17,31 @@ test('quiet active builds are not idle, warning/explicit extension have separate
 test('container loss and ambiguous dispatch become interrupted without arbitrary-shell restarts',async()=>{for(const dispatch of [true,false]){const f=fixture();await f.open();if(dispatch)f.failDispatch();await f.call({action:'exec',argv:['sh','-c','echo changed']},1);if(!dispatch){f.setProcess('lost');await f.call({action:'status'},2)}assert.equal(f.state().runs[op(1)].state,'interrupted');assert.equal(f.counts.starts,1);await f.call({action:'exec',argv:['sh','-c','echo changed']},1);assert.equal(f.counts.starts,1)}});
 test('cancel has bounded grace, artifact failure or hanging capture cannot prevent whole-container stop',async()=>{for(const hang of [true,false]){const f=fixture();await f.open();await f.call({action:'exec',argv:['npm','test']},1);if(hang)f.hangCollect();else f.failCollect();await f.call({action:'cancel'},2);assert.equal(f.state().phase,'stopping');assert.equal(f.counts.stops,0);f.advance(11);await f.controller.tick();assert.equal(f.state().phase,'closed');assert.equal(f.counts.stops,1);assert.match(f.state().gaps.join(' '),/incomplete/);assert.equal(f.counts.captures,1)}});
 test('immutable exports include large base-relative patches in bounded storage chunks and survive stop',async()=>{const f=fixture();await f.open();const first=await f.call({action:'export'},1) as any;await f.call({action:'export'},1);assert.equal(f.counts.captures,1);const artifact=await f.controller.artifact(first.artifactId);assert.equal(artifact.patch.length,200000);assert.equal(artifact.base,'a'.repeat(40));await f.call({action:'cancel'},2);f.advance(11);await f.controller.tick();assert.equal((await f.controller.artifact(first.artifactId)).patch,artifact.patch);assert.equal(f.state().phase,'closed')});
+test('an active-command export rejection leaves the same operation safe to retry after completion and restart',async()=>{
+ const f=fixture();await f.open();await f.call({action:'exec',argv:['npm','test']},1);
+ await assert.rejects(f.call({action:'export'},2),/Wait for the command before exporting/);
+ assert.equal(f.counts.captures,0);assert.equal(f.data.has('operation:'+op(2)),false);assert.equal(f.data.has('artifact:'+op(2)),false);
+ f.setProcess('exited');const reopened=new WorkspaceController(f.store,f.adapter,DEFAULT_WORKSPACE_LIMITS,()=>0),request={action:'export' as const,workspaceId,operationId:op(2)};
+ const result=await reopened.request(request) as any;assert.equal(result.artifactId,op(2));assert.equal(f.state().active,undefined);assert.equal(f.state().runs[op(1)].state,'done');assert.equal(f.counts.captures,1);
+ const artifact=await reopened.artifact(result.artifactId);f.adapter.collect=async()=>{throw Error('Must not collect a successful export again')};
+ assert.deepEqual(await reopened.request(request),result);assert.deepEqual(await reopened.artifact(result.artifactId),artifact);
+ await assert.rejects(reopened.request({action:'read',path:'README.md',workspaceId,operationId:op(2)}),/already used/);
+});
+test('export queued behind dispatch rechecks the active command and concurrent same-ID retries collect once',async()=>{
+ const f=fixture();await f.open();let release!:()=>void,entered!:()=>void;const dispatchEntered=new Promise<void>(resolve=>entered=resolve),gate=new Promise<void>(resolve=>release=resolve),dispatch=f.adapter.dispatch;
+ f.adapter.dispatch=async(...args)=>{await dispatch(...args);entered();await gate};
+ const running=f.call({action:'exec',argv:['npm','test']},1);await dispatchEntered;
+ const rejected=assert.rejects(f.call({action:'export'},2),/Wait for the command before exporting/);release();await running;await rejected;
+ assert.equal(f.counts.captures,0);assert.equal(f.data.has('operation:'+op(2)),false);
+ f.setProcess('exited');const collect=f.adapter.collect;f.adapter.collect=async(...args)=>{assert.ok(f.data.get('operation:'+op(2))?.fingerprint,'reserve before collection starts');return collect(...args)};
+ const [first,second]=await Promise.all([f.call({action:'export'},2),f.call({action:'export'},2)]);assert.deepEqual(first,second);assert.equal(f.counts.captures,1);assert.equal(f.counts.starts,1);
+});
+test('failed or timed-out export collection retains its durable no-replay fence after restart',async()=>{
+ for(const hang of [false,true]){const f=fixture();await f.open();if(hang)f.hangCollect();else f.failCollect();
+  await assert.rejects(f.call({action:'export'},1),/Capture failed|timed out|interrupted/);assert.ok(f.data.get('operation:'+op(1))?.fingerprint);assert.equal(f.data.has('artifact:'+op(1)),false);
+  const reopened=new WorkspaceController(f.store,f.adapter,DEFAULT_WORKSPACE_LIMITS,()=>0);await assert.rejects(reopened.request({action:'export',workspaceId,operationId:op(1)}),/Previous operation is interrupted/);assert.equal(f.counts.captures,1);
+ }
+});
 test('idle cleanup is independent of status reconnects and interrupted initialization is not cloned again',async()=>{const f=fixture();await f.open();f.advance(16*60000);await f.call({action:'status'},1);assert.equal(f.state().phase,'stopping');const second=fixture();second.data.set('state',{id:workspaceId,session:'1',repo:'owner/project',phase:'initializing',deadline:100,lastUsed:0,runs:{},gaps:[]});await second.open();assert.equal(second.state().phase,'closed');assert.equal(second.counts.starts,0);});
 test('project paths stay relative and edits cannot touch git control files',()=>{for(const p of ['/etc/passwd','../file','.git/config','x/../../file','bad\0name'])assert.throws(()=>projectPath(p));assert.equal(projectPath('src/app.ts'),'src/app.ts')});
 test('cancel interrupts delayed setup promptly and cleanup aborts a delayed capture before stopping',async()=>{

@@ -55,6 +55,8 @@ Routine installs, builds and test suites should omit `limitMs` and retain the 30
 
 The resource class is `standard-1` (1/2 vCPU, 4 GiB RAM, 8 GB disk), with an app-owned one-active-workspace admission limit and at most 100 commands per task. Guest logs have a file-size limit. Exports cap patch output at 512 KB and use bounded Durable Object storage chunks. Logs preserve only their tails. Artifacts are immutable per export ID and available through existing owner authentication and same-origin mutation checks. Cancellation saves available work best effort, then stops compute; missing/truncated logs, capture failures and uncertain stop confirmation are reported. A patch captured while a command is still stopping is explicitly marked. No Git commit or PR is created by export.
 
+The panel disables Save patch & logs while a command is active and enables it after status confirms completion. A stale panel or direct export request is checked again inside the controller's serial queue. An active-command rejection occurs before reserving the export ID, so the panel can retain that ID and retry after completion. Collection still reserves its ID durably before it starts: failed, interrupted or timed-out collection is never replayed, and a successful retry returns the original immutable artifact.
+
 ## Configuration and future integration
 
 The implementation uses the [Sandbox 1.0 app-owned container API](https://developers.cloudflare.com/sandbox/sdk/migrate/changes-in-1-0/) and [request-independent process records](https://developers.cloudflare.com/sandbox/commands/run-background-processes/), not SDK 0.x sessions. Each call supplies cwd explicitly. A constructor restores inactivity management and alarms for a still-running guest.
