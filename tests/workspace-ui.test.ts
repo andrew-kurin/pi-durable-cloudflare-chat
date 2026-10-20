@@ -1,4 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {JSDOM} from 'jsdom';import {readFile} from 'node:fs/promises';import {workspacePanel} from '../public/workspace.js';
+import {WorkspaceController,DEFAULT_WORKSPACE_LIMITS,type WorkspaceAdapter} from '../src/workspace';
 test('owner panel is off by default, retries the same workspace ID and exposes explicit extension/export/cancel',async()=>{
  const dom=new JSDOM(await readFile('public/index.html','utf8'),{url:'https://chat.example.test'}),d=dom.window.document;const requests:any[]=[];let currentId:any,openFails=true;const state={id:'a'.repeat(36),phase:'ready',runs:{},gaps:['<img onerror=attack>'],deadline:100};
  const api=async(path:string,body:any)=>{requests.push({path,body});if(body?.workspaceId){if(openFails){openFails=false;throw Error('Temporary failure')}currentId=body.workspaceId;return {...state,id:currentId}}if(body?.action==='export')return {url:'/api/workspaces/'+currentId+'/artifact?export='+body.operationId};if(body)return {...state,id:currentId};if(path==='/api/workspaces?session=1')return {workspaceId:currentId};return {...state,id:currentId}};
@@ -27,6 +28,31 @@ test('polling during slow export does not discard its saved download link',async
  const dom=new JSDOM(await readFile('public/index.html','utf8'),{url:'https://chat.example.test'}),d=dom.window.document;const id='a'.repeat(36),ready={id,phase:'ready',runs:{},gaps:[]};let poll:any,release:any;dom.window.setInterval=((fn:any)=>{poll=fn;return 1}) as any;
  const api=async(path:string,body:any)=>{if(body?.action==='export')return new Promise(resolve=>release=()=>resolve({url:'/saved-artifact'}));if(path==='/api/workspaces?session=1')return {workspaceId:id};return ready};
  const panel=workspacePanel({document:d,api,currentSession:()=> '1'});try{await panel.configure({workspaceEnabled:true,workspaceRepository:'owner/project'});const exporting=(d.getElementById('workspace-export') as any).onclick();await new Promise(r=>setTimeout(r,0));poll();await new Promise(r=>setTimeout(r,0));release();await exporting;assert.equal(d.getElementById('workspace-artifact')!.hidden,false);assert.equal(d.getElementById('workspace-artifact')!.getAttribute('href'),'/saved-artifact');}finally{dom.window.dispatchEvent(new dom.window.Event('pagehide'));dom.window.close()}
+});
+
+test('Export waits for dispatching and running commands, then becomes available after completion',async()=>{
+ const dom=new JSDOM(await readFile('public/index.html','utf8'),{url:'https://chat.example.test'}),d=dom.window.document;
+ let state:any={id:'a'.repeat(36),phase:'ready',active:'run',runs:{run:{state:'dispatching',deadline:100}},gaps:[]},exports=0;
+ const panel=workspacePanel({document:d,currentSession:()=> '1',api:async(path:string,body:any)=>{if(body?.action==='export'){exports++;return {url:'/saved-artifact'}}return path==='/api/workspaces?session=1'?{workspaceId:state.id}:state;}});
+ try{await panel.configure({workspaceEnabled:true});const button=d.getElementById('workspace-export') as HTMLButtonElement;
+  for(const runState of ['dispatching','running']){state.runs.run.state=runState;await panel.refresh();assert.equal(button.disabled,true);assert.match(button.title,/Wait for the command/);assert.match(d.getElementById('workspace-warning')!.textContent!,/Wait for the command/);button.click();assert.equal(exports,0);}
+  state={...state,active:undefined,runs:{run:{state:'done',exitCode:0}}};await panel.refresh();assert.equal(button.disabled,false);assert.doesNotMatch(d.getElementById('workspace-warning')!.textContent!,/Wait for the command/);assert.doesNotMatch(button.title,/Wait for the command/);
+  await (button as any).onclick();assert.equal(exports,1);assert.equal(d.getElementById('workspace-artifact')!.getAttribute('href'),'/saved-artifact');
+ }finally{dom.window.dispatchEvent(new dom.window.Event('pagehide'));dom.window.close();}
+});
+
+test('stale panel export rejection retains its ID across refresh and succeeds against the controller after the command exits',async()=>{
+ const dom=new JSDOM(await readFile('public/index.html','utf8'),{url:'https://chat.example.test'}),d=dom.window.document,id='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',data=new Map<string,any>();let exited=false,captures=0;const exports:any[]=[];
+ const adapter:WorkspaceAdapter={open:async()=> 'a'.repeat(40),read:async()=>'',edit:async()=>{},dispatch:async()=>{},status:async()=>({state:exited?'exited':'running',exitCode:exited?0:undefined}),logs:async()=> 'test output',terminate:async()=>{},collect:async()=>{captures++;return {base:'a'.repeat(40),patch:'saved patch',logs:{test:'test output'},gaps:[]}},stop:async()=>{},keepAlive:async()=>{}};
+ const controller=new WorkspaceController({get:async<T>(key:string)=>structuredClone(data.get(key)) as T|undefined,put:async(key,value)=>{data.set(key,structuredClone(value))},setAlarm:async()=>{},deleteAlarm:async()=>{}},adapter,DEFAULT_WORKSPACE_LIMITS,()=>0);
+ await controller.open(id,'1','owner/project');
+ const panel=workspacePanel({document:d,currentSession:()=> '1',api:async(path:string,body:any)=>{if(path==='/api/workspaces?session=1')return {workspaceId:id};if(body?.action==='export')exports.push({...body});return controller.request({workspaceId:id,...(body??{action:'status',operationId:'f'.repeat(64)})});}});
+ try{await panel.configure({workspaceEnabled:true});const button=d.getElementById('workspace-export') as HTMLButtonElement;assert.equal(button.disabled,false);
+  await controller.request({workspaceId:id,action:'exec',argv:['npm','test'],operationId:'1'.repeat(64)});
+  await (button as any).onclick();assert.match(d.getElementById('workspace-warning')!.textContent!,/Wait for the command before exporting/);assert.equal(exports.length,1);assert.equal(captures,0);
+  await panel.refresh();assert.equal(button.disabled,true);exited=true;await panel.refresh();assert.equal(button.disabled,false);
+  await (button as any).onclick();assert.equal(exports.length,2);assert.equal(exports[0].operationId,exports[1].operationId);assert.equal(captures,1);assert.equal(d.getElementById('workspace-artifact')!.hidden,false);assert.match(d.getElementById('workspace-artifact')!.getAttribute('href')!,new RegExp('export='+exports[0].operationId));
+ }finally{dom.window.dispatchEvent(new dom.window.Event('pagehide'));dom.window.close();}
 });
 
 test('cached page restoration resumes one workspace polling timer and refreshes immediately',async()=>{
