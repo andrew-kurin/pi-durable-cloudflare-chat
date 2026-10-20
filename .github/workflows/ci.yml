@@ -56,3 +56,4 @@ jobs:
           CHROME_EXECUTABLE="$task_chrome" node tests/workspace-resume.mjs
           CHROME_EXECUTABLE="$task_chrome" node tests/copy-controls.mjs
           CHROME_EXECUTABLE="$task_chrome" node tests/maintenance-controls.mjs
+          CHROME_EXECUTABLE="$task_chrome" node --import tsx tests/runner-errors.mjs

@@ -35,8 +35,8 @@ const retain=(s:MemoryStorage)=>new Proxy(s,{get(t,k){if(k==='close')return asyn
 test('actual pinned Harness carries durable task identity; tool continuation gets a new round; input replay after reconstruction never dispatches', {timeout:10000},async()=>{
  const f=await fixture(),storage=new MemoryStorage();let h=await open(retain(storage),f.models());
  try{
-  let root=await h.root(context,{agent:{model:{provider:'model-runner-siwc',modelId:'gpt-6.1-sol'}}});
-  const submission=await root.submit({type:'input',content:'fixture',requestId:'accepted-operation'},context);assert.equal((await submission.wait(context)).status,'done');assert.equal(f.calls.length,2);assert.equal(f.wire.length,2);assert.notEqual(f.wire[0].id,f.wire[1].id);
+  let root=await h.root(context,{agent:{thinkingLevel:'high',model:{provider:'model-runner-siwc',modelId:'gpt-6.1-sol'}}});
+  const submission=await root.submit({type:'input',content:'fixture',requestId:'accepted-operation'},context);assert.equal((await submission.wait(context)).status,'done');assert.equal(f.calls.length,2);assert.equal(f.wire.length,2);for(const call of f.calls){assert.equal(call.body.reasoning.effort,'high');assert.ok(!call.body.input.some((x:any)=>x.type==='configuration_update'));}assert.notEqual(f.wire[0].id,f.wire[1].id);
   const records=[...f.persisted.records.values()];assert.equal(records.length,2);assert.notEqual(records[0].task,records[1].task);assert.equal(records[0].conversation,records[1].conversation);assert.ok(f.calls[1].body.input.some((x:any)=>x.type==='function_call_output'));
   const before=await root.entries({},100,undefined,context);await h.close(context);h=await open(retain(storage),f.models());root=await h.root(context);const again=await root.submit({type:'input',content:'fixture',requestId:'accepted-operation'},context);assert.equal((await again.wait(context)).status,'done');assert.equal(again.id,submission.id);assert.equal(f.calls.length,2);assert.deepEqual(await root.entries({},100,undefined,context),before);
  }finally{await h.close(context);await storage.close();await f.dispose();}
@@ -44,6 +44,19 @@ test('actual pinned Harness carries durable task identity; tool continuation get
 test('real Harness ambiguous dispatch is not retried despite enabled retry policy', {timeout:10000},async()=>{
  const f=await fixture(async()=>{throw Error('Connection error 503');}),storage=new MemoryStorage(),h=await open(storage,f.models());
  try{const root=await h.root(context,{agent:{model:{provider:'model-runner-siwc',modelId:'gpt-6.1-sol'}}});const receipt=await(await root.submit({type:'input',content:'fixture',requestId:'ambiguous-operation'},context)).wait(context);assert.equal(receipt.status,'unanswered');assert.equal(f.calls.length,1);assert.equal(f.wire.length,1);assert.equal(f.persisted.records.size,1);}finally{await h.close(context);await f.dispose();}
+});
+test('actual generation saves subscription input rejection and replay after restart retains both permanent fences', {timeout:10000},async()=>{
+ const f=await fixture(async()=>Response.json({error:{code:'subscription_sharing_unsupported_capability',param:'input',message:'PRIVATE-PROVIDER'}},{status:400})),storage=new MemoryStorage();let h=await open(retain(storage),f.models());
+ try{
+  let root=await h.root(context,{agent:{thinkingLevel:'low',model:{provider:'model-runner-siwc',modelId:'gpt-6.1-sol'}}});
+  const first=await root.submit({type:'input',content:'offline rejection fixture',requestId:'rejected-operation'},context);assert.equal((await first.wait(context)).status,'unanswered');
+  assert.equal(f.calls.length,1);assert.equal(f.journal.rounds.size,1);assert.equal(f.persisted.records.size,1);assert.equal(f.calls[0].body.reasoning.effort,'low');assert.ok(!f.calls[0].body.input.some((x:any)=>x.type==='configuration_update'));
+  const before=await root.entries({},100,undefined,context),failed=before.items.flatMap((e:any)=>e.model??[]).find((m:any)=>m.role==='assistant'&&m.stopReason==='error');
+  assert.ok(failed);assert.ok(failed.diagnostics.some((d:any)=>d.type==='model_runner_round_failure'&&d.details.provider.code==='subscription_sharing_unsupported_capability'));assert.doesNotMatch(JSON.stringify(failed),/PRIVATE-PROVIDER/);
+  const workerRecords=structuredClone([...f.persisted.records]),runnerRecords=[...f.journal.rounds];await h.close(context);h=await open(retain(storage),f.models());root=await h.root(context);
+  const again=await root.submit({type:'input',content:'offline rejection fixture',requestId:'rejected-operation'},context);assert.equal(again.id,first.id);assert.equal((await again.wait(context)).status,'unanswered');
+  assert.equal(f.calls.length,1);assert.deepEqual([...f.persisted.records],workerRecords);assert.deepEqual([...f.journal.rounds],runnerRecords);assert.deepEqual(await root.entries({},100,undefined,context),before);
+ }finally{await h.close(context);await storage.close();await f.dispose();}
 });
 test('reopening an interrupted actual generation retains its round fence instead of replaying inference', {timeout:10000},async()=>{
  const entered=deferred<void>(),f=await fixture(async(_p,_a,signal)=>{entered.resolve();await new Promise<void>(ok=>{if(signal.aborted)ok();else signal.addEventListener('abort',()=>ok(),{once:true});});throw Error('Stopped');}),storage=new MemoryStorage();let h=await open(retain(storage),f.models());
