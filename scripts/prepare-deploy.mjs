@@ -13,6 +13,10 @@ function flag(name) {
 }
 const target = process.env.DEPLOY_TARGET?.trim() || 'production';
 if (!['production','staging'].includes(target)) throw new Error('Invalid deployment target');
+const maintenanceMode=process.env.MAINTENANCE_MODE?.trim()||'active';
+if(!['active','frozen'].includes(maintenanceMode)||target==='staging'&&maintenanceMode!=='active')throw Error('Invalid maintenance mode for deployment target');
+const revision=process.env.GITHUB_SHA?.trim()||'local';
+if(revision!=='local'&&!/^[a-f0-9]{40}$/.test(revision))throw Error('Invalid source revision');
 const workerName = target === 'staging' ? 'pi-private-chat-workspace-staging' : 'pi-private-chat';
 const modelEnabled = target === 'staging' ? 'false' : flag('ENABLE_MODEL');
 const loginEnabled = target === 'staging' ? 'false' : flag('ENABLE_SUBSCRIPTION_LOGIN');
@@ -71,6 +75,7 @@ if (target === 'staging') {
   config.durable_objects = { bindings: workspaceProvisioned === 'true' ? [{ name: 'Workspaces', class_name: 'TaskWorkspace' }] : [] };
   config.migrations = workspaceProvisioned === 'true' ? [{ tag: 'workspace-smoke-v1', new_sqlite_classes: ['TaskWorkspace'] }] : [];
 }
+if(target==='production'&&maintenanceMode==='frozen')config.main='src/maintenance-worker.ts';
 if (workspaceProvisioned === 'true') {
   if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(repository) || repository.split('/').some(x => x === '.' || x === '..')) throw new Error('Workspace requires one trusted public owner/repository');
   const prefix = `registry.cloudflare.com/${accountId}/`;
@@ -93,7 +98,10 @@ config.define = { ...(config.define || {}), PI_DEPLOYMENT_MODE: JSON.stringify(`
 if (workspaceProvisioned === 'true') config.define.PI_DEPLOYMENT_MODE = JSON.stringify(`${mode}:web-${webSearchEnabled}:test-${webSearchTest}:origin-${app.hostname}:workspace-${workspaceEnabled}:smoke-${workspaceSmoke}:${image}:${repository}`);
 if(grokEnabled==='true')config.define.PI_DEPLOYMENT_MODE=JSON.stringify(JSON.parse(config.define.PI_DEPLOYMENT_MODE)+':grok-true');
 if (runnerEnabled === 'true') config.define.PI_DEPLOYMENT_MODE = JSON.stringify(JSON.parse(config.define.PI_DEPLOYMENT_MODE) + ':runner-' + runnerEndpoint);
+config.define.PI_DEPLOYMENT_MODE=JSON.stringify(JSON.parse(config.define.PI_DEPLOYMENT_MODE)+':maintenance-'+maintenanceMode+':revision-'+revision);
 config.vars = {
+  MAINTENANCE_MODE:maintenanceMode,
+  SOURCE_REVISION:revision,
   ACCESS_TEAM_DOMAIN: teamDomain,
   ACCESS_AUD: aud,
   OWNER_EMAILS: [...new Set(owners)].join(','),

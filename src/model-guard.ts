@@ -7,7 +7,7 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/utils/e
 /** Enforce before Models resolves OAuth or dispatches any network request.
  * Extension hooks are intentionally NOT used: Pi reports and swallows their errors.
  */
-export function guardModels(models:MutableModels,reserve:()=>Promise<void>){
+export function guardModels(models:MutableModels,reserve:()=>Promise<void>,beforeFetch:()=>Promise<void>=async()=>{}){
  const original=models.streamSimple.bind(models);
  models.streamSimple=(model,context,options)=>{
   const output=createAssistantMessageEventStream();
@@ -18,7 +18,7 @@ export function guardModels(models:MutableModels,reserve:()=>Promise<void>){
    const attach=(message:AssistantMessage)=>{if(recorded.has(message))return;recorded.add(message);for(const response of responses)appendAssistantMessageDiagnostic(message,response);};
    const fetcher=options?.fetch??globalThis.fetch;
    const source=original(model,context,{...options,
-    fetch:(input,init)=>{requestEndpoint=undefined;try{const url=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url);if(url.origin==='https://chatgpt.com'&&url.pathname==='/backend-api/codex/responses')requestEndpoint=url.origin+url.pathname;}catch{}return fetcher(input,init);},
+    fetch:async(input,init)=>{await beforeFetch();requestEndpoint=undefined;try{const url=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url);if(url.origin==='https://chatgpt.com'&&url.pathname==='/backend-api/codex/responses')requestEndpoint=url.origin+url.pathname;}catch{}return fetcher(input,init);},
     onResponse:async(response,responseModel)=>{
      if(Number.isInteger(response.status)&&response.status>=100&&response.status<=599&&responses.length<8){
       const details:Record<string,string|number>={status:response.status,turnId,responseIndex:responses.length+1};

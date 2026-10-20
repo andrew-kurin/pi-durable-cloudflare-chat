@@ -9,7 +9,9 @@ import { RequestError, discardBody, jsonObject } from "./http-input";
 import { SubmissionAdmission, type ArrivedSubmission } from "./submission-admission";
 import { logTechnicalError } from "./error-log";
 import { DurableObject } from "cloudflare:workers";
-import { PiHarness } from "agents/harness/pi";
+import type { PiHarness } from "agents/harness/pi";
+import {MaintenanceHarness} from "./maintenance-harness";
+import {Maintenance,type MaintenanceEnv} from "./maintenance";
 import { HarnessRecovery } from './harness-recovery';
 import { Lifecycle } from "agents/lifecycle";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -34,7 +36,7 @@ import { createCredentialStore } from "./credentials";
 declare const PI_DEPLOYMENT_MODE: string;
 const deploymentMode =
   typeof PI_DEPLOYMENT_MODE === "undefined" ? "local" : PI_DEPLOYMENT_MODE;
-interface Env extends AccessConfig, RunnerConfig {
+interface Env extends AccessConfig, RunnerConfig, MaintenanceEnv {
   ASSETS: Fetcher;
   Assistant: DurableObjectNamespace<Assistant>;
   CREDENTIAL_ENCRYPTION_KEY: string;
@@ -52,6 +54,8 @@ interface Env extends AccessConfig, RunnerConfig {
   Workspaces?: DurableObjectNamespace<TaskWorkspace>;
 }
 export class Assistant extends DurableObject<Env> {
+  private maintenance = new Maintenance(this.ctx.storage,this.env);
+  private piOpened = false;
   private workspaces = new WorkspaceCoordinator(
     this.ctx.storage,
     this.env,
@@ -65,8 +69,9 @@ export class Assistant extends DurableObject<Env> {
     this.env.CREDENTIAL_ENCRYPTION_KEY,
   );
   private models = guardModels(createChatModels(this.credentials,
-    runnerConfigured(this.env) ? createWorkerRunnerProvider(this.env, this.ctx.storage, this.ctx.id.toString(), (input, init) => globalThis.fetch(input, init)) : undefined,
+    runnerConfigured(this.env) ? createWorkerRunnerProvider(this.env, this.ctx.storage, this.ctx.id.toString(), (input, init) => this.maintenance.withActive(()=>globalThis.fetch(input,init))) : undefined,
   ), async () => {
+    await this.maintenance.assertActive();
     if (this.env.ENABLE_MODEL !== "true") throw new Error("Model disabled");
     await this.ctx.storage.transaction(async (tx) => {
       const day = new Date().toISOString().slice(0, 10);
@@ -75,7 +80,7 @@ export class Assistant extends DurableObject<Env> {
       if (used >= 150) throw new Error("Daily model request limit");
       await tx.put("model-quota", { day, count: used + 1 });
     });
-  });
+  },()=>this.maintenance.assertActive());
   private providers = new ProviderSessions(
     this.env,
     this.ctx.storage,
@@ -91,19 +96,20 @@ export class Assistant extends DurableObject<Env> {
   }
   private admission: Promise<unknown> = Promise.resolve();
   private harnessRecovery = new HarnessRecovery();
-  harness = new PiHarness({
+  harness = new MaintenanceHarness({
     harness: async ({ storage, context }) => {
+      await this.maintenance.assertCanOpen();
       const registry = createRegistry();
       registry.install(delegation());
       registry.install(compactionLogs(this.env.WORKER_VERSION?.id));
       if (this.workspaceEnabled())
         registry.install(
           workspaceTools({
-            request: (session, r, progress) => this.workspaces.execute(session, r, progress),
+            request: (session, r, progress) => this.maintenance.withActive(()=>this.workspaces.execute(session,r,progress)),
           }),
         );
-      registry.install(readTools(this.ctx.storage, this.env));
-      return this.harnessRecovery.observe(await Harness.open(
+      registry.install(readTools(this.ctx.storage, this.env, (input,init) => this.maintenance.withActive(()=>globalThis.fetch(input,init))));
+      const opened = this.harnessRecovery.observe(await Harness.open(
         storage,
         {
           models: this.models,
@@ -117,12 +123,13 @@ export class Assistant extends DurableObject<Env> {
         },
         context,
       ));
+      this.piOpened = true;return opened;
     },
     defaults: {
       model: runnerConfigured(this.env) ? { provider: "model-runner-siwc", id: "gpt-6.1-sol" } : { provider: "openai-codex", id: "gpt-6-sol" },
       thinkingLevel: "low",
     },
-  });
+  },this.maintenance);
   private submissions = new SubmissionAdmission(this.ctx.storage, {
     isBusy: async () => (await this.harness.sessions.list()).some((s) => s.busy),
     captureIntent: sessionId => this.workspaces.submissionEpoch(sessionId),
@@ -151,6 +158,16 @@ export class Assistant extends DurableObject<Env> {
     } catch {
       return new Response("Forbidden", { status: 403 });
     }
+    if(new URL(request.url).pathname==='/api/maintenance') {
+      try{return await this.maintenance.handle(request,{validate:async()=>{try{await this.harness.sessions.list();}catch(error){this.piOpened=false;await this.harness.dispose();throw error;}},...(this.piOpened?{stop:async(sessions:string[])=>{for(const session of sessions)await this.submissions.stop(session);}}:{})});}
+      catch(error){return Response.json({error:error instanceof RequestError?error.message:'Maintenance operation unavailable; remain paused.'},{status:error instanceof RequestError?error.status:503});}
+    }
+    const maintenanceEpoch=await this.maintenance.arrival();
+    try {await this.maintenance.assertActive();}catch(error){
+      // Stop may use an already-open cached runtime; it must never reopen Pi.
+      if(!(new URL(request.url).pathname==='/api/abort'&&request.method==='POST'&&this.piOpened))return Response.json({error:'Maintenance is paused. Open /maintenance.'},{status:423});
+      return this.handle(request);
+    }
     try {
       await this.harnessRecovery.prepare(() => this.harness.dispose());
     } catch (error) {
@@ -162,14 +179,14 @@ export class Assistant extends DurableObject<Env> {
       request.method === "POST" &&
       ["/api/events/close", "/api/abort"].includes(new URL(request.url).pathname)
     )
-      return this.handle(request);
+      return this.activeRequest(request,maintenanceEpoch);
     if (
       request.method === "POST" &&
       /^\/api\/workspaces\/[a-f0-9-]{36}(?:\/extend)?$/.test(
         new URL(request.url).pathname,
       )
     )
-      return this.handle(request);
+      return this.activeRequest(request,maintenanceEpoch);
     if (request.method === "POST") {
       // Capture arrival generation before joining the queue, so Stop also cancels
       // submissions waiting behind an unrelated mutation.
@@ -177,14 +194,18 @@ export class Assistant extends DurableObject<Env> {
       const sid = url.searchParams.get("session") ?? "1";
       const submit = url.pathname === "/api/submit" && /^\d{1,12}$/.test(sid)
         ? this.submissions.atArrival(sid) : undefined;
-      const work = this.admission.then(() => this.handle(request, submit));
+      const work = this.admission.then(() => this.activeRequest(request,maintenanceEpoch,submit));
       this.admission = work.then(
         () => undefined,
         () => undefined,
       );
       return work;
     }
-    return this.handle(request);
+    return this.activeRequest(request,maintenanceEpoch);
+  }
+  private async activeRequest(request:Request,epoch:string,submit?:ArrivedSubmission<Awaited<ReturnType<PiHarness['submit']>>>):Promise<Response>{
+    try{return await this.maintenance.withActive(()=>this.handle(request,submit),epoch);}
+    catch(error){if(error instanceof RequestError)return Response.json({error:error.message,code:error.code},{status:error.status});throw error;}
   }
   private async handle(request: Request, submit?: ArrivedSubmission<Awaited<ReturnType<PiHarness["submit"]>>>): Promise<Response> {
     const url = new URL(request.url);
@@ -536,6 +557,8 @@ export default {
       );
     }
     const url = new URL(request.url);
+    if(url.pathname==='/maintenance')url.pathname='/maintenance.html';
+    if(url.pathname==='/maintenance.html'||url.pathname==='/maintenance.js')return secured(await env.ASSETS.fetch(new Request(url,request)));
     if (
       url.pathname === "/grok-setup" ||
       url.pathname === "/grok-setup.html" ||

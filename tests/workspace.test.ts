@@ -44,6 +44,13 @@ test('failed or timed-out export collection retains its durable no-replay fence 
 });
 test('idle cleanup is independent of status reconnects and interrupted initialization is not cloned again',async()=>{const f=fixture();await f.open();f.advance(16*60000);await f.call({action:'status'},1);assert.equal(f.state().phase,'stopping');const second=fixture();second.data.set('state',{id:workspaceId,session:'1',repo:'owner/project',phase:'initializing',deadline:100,lastUsed:0,runs:{},gaps:[]});await second.open();assert.equal(second.state().phase,'closed');assert.equal(second.counts.starts,0);});
 test('project paths stay relative and edits cannot touch git control files',()=>{for(const p of ['/etc/passwd','../file','.git/config','x/../../file','bad\0name'])assert.throws(()=>projectPath(p));assert.equal(projectPath('src/app.ts'),'src/app.ts')});
+test('maintenance admission rechecks queued exec, open and extension before any side effect',async()=>{
+ const f=fixture();await f.open();let entered!:()=>void,release!:()=>void,paused=false;const started=new Promise<void>(r=>entered=r),held=new Promise<void>(r=>release=r);
+ f.adapter.read=async()=>{entered();await held;return 'held';};const reading=f.call({action:'read',path:'README.md'},1);await started;
+ const admit=async()=>{if(paused)throw Error('Maintenance paused');};
+ const exec=assert.rejects(f.controller.request({action:'exec',argv:['npm','test'],workspaceId,operationId:op(2)},admit),/Maintenance/),opening=assert.rejects(f.controller.open(workspaceId,'1','owner/project',admit),/Maintenance/),extension=assert.rejects(f.controller.extend('task',30,admit),/Maintenance/);
+ paused=true;release();await reading;await Promise.all([exec,opening,extension]);assert.equal(f.counts.starts,0);assert.equal(f.data.has('operation:'+op(2)),false);assert.equal(f.state().deadline,DEFAULT_WORKSPACE_LIMITS.taskMs);
+});
 test('cancel interrupts delayed setup promptly and cleanup aborts a delayed capture before stopping',async()=>{
  const f=fixture();let abortObserved=false;f.adapter.open=async(_repo,signal)=>new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(Error('setup cancelled'))));
  const opening=f.open();await new Promise(r=>setTimeout(r,0));await f.call({action:'cancel'},1);await opening;assert.equal(f.state().phase,'closed');assert.equal(f.counts.stops,1);

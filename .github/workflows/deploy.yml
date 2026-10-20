@@ -14,6 +14,13 @@ on:
         description: 'Approved one-image build/upload; pin its registry manifest digest'
         type: boolean
         default: false
+      maintenance_mode:
+        description: 'Frozen never opens Pi; active still requires explicit checkpoint resume'
+        type: choice
+        default: frozen
+        options:
+          - frozen
+          - active
 
 permissions:
   contents: read
@@ -82,6 +89,7 @@ jobs:
         run: node scripts/prepare-deploy.mjs
         env:
           DEPLOY_TARGET: ${{ inputs.target || 'production' }}
+          MAINTENANCE_MODE: ${{ inputs.maintenance_mode }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           ACCESS_TEAM_DOMAIN: ${{ vars.ACCESS_TEAM_DOMAIN }}
           ACCESS_AUD: ${{ vars.ACCESS_AUD }}
