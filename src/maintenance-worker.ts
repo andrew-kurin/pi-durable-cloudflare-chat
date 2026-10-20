@@ -21,7 +21,6 @@ export default {async fetch(request:Request,env:Env){
  try{await authorize(request,env);}catch{return secured(new Response('Forbidden',{status:403}));}
  const u=new URL(request.url);
  if(u.pathname.startsWith('/api/'))return secured(await env.Assistant.getByName('private-owner-v1').fetch(request));
- if(u.pathname==='/maintenance')u.pathname='/maintenance.html';
- if(!['/maintenance.html','/maintenance.js'].includes(u.pathname)||request.method!=='GET')return secured(new Response('Maintenance is frozen. Open /maintenance.',{status:423}));
+ if(!['/maintenance','/maintenance.html','/maintenance.js'].includes(u.pathname)||request.method!=='GET')return secured(new Response('Maintenance is frozen. Open /maintenance.',{status:423}));
  return secured(await env.ASSETS.fetch(new Request(u,request)));
 }};

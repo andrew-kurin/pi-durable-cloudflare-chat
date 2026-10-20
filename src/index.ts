@@ -555,8 +555,7 @@ export default {
       );
     }
     const url = new URL(request.url);
-    if(url.pathname==='/maintenance')url.pathname='/maintenance.html';
-    if(url.pathname==='/maintenance.html'||url.pathname==='/maintenance.js')return secured(await env.ASSETS.fetch(new Request(url,request)));
+    if(url.pathname==='/maintenance'||url.pathname==='/maintenance.html'||url.pathname==='/maintenance.js')return secured(await env.ASSETS.fetch(new Request(url,request)));
     if (
       url.pathname === "/grok-setup" ||
       url.pathname === "/grok-setup.html" ||
