@@ -122,3 +122,17 @@ test('new intent waits for a delayed session-wide Stop to finish before dispatch
   e=await f.control('evidence?op=intent-during-stop');assert.ok(e.trace.indexOf('abort:finished')<e.trace.indexOf('submit:entered'));assert.equal(e.effects,1);assert.equal(e.quota.count,1);
  }finally{await f.control('release?name=abort');await Promise.allSettled([stop,submit].filter(Boolean) as Promise<Response>[]);await f.dispose();}
 });
+
+test('actual owner submit route re-enables workspace after Stop once; receipt replay preserves later Stop',async()=>{
+ const f=await fixture();try{
+  const stop=()=>f.post('/api/workspaces/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa?session=1',{action:'cancel',operationId:'a'.repeat(64)});
+  assert.equal((await stop()).status,200);
+  assert.equal((await f.submit('workspace-new-request','Review the project')).status,200);
+  const first=await f.control('evidence?op=workspace-new-request');assert.equal(first.workspaceIntent.blocked,false);
+  assert.equal((await stop()).status,200);
+  assert.equal((await f.submit('workspace-new-request','Review the project')).status,200);
+  assert.equal((await f.control('evidence?op=workspace-new-request')).workspaceIntent.blocked,true);
+  assert.equal((await f.submit('workspace-next-request','Continue the project review')).status,200);
+  assert.equal((await f.control('evidence?op=workspace-next-request')).workspaceIntent.blocked,false);
+ }finally{await f.dispose();}
+});

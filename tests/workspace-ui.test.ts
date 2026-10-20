@@ -50,3 +50,15 @@ test('workspace stop and deadline controls name their scope and only extend an a
   state={...state,active:undefined,runs:{run:{state:'done',exitCode:0}}};await panel.refresh();assert.equal((d.getElementById('workspace-extend-command') as HTMLButtonElement).disabled,true);assert.match(d.getElementById('workspace-extend-command')!.title,/No active command/);
  }finally{dom.window.dispatchEvent(new dom.window.Event('pagehide'));dom.window.close();}
 });
+
+test('durable activation block overrides a stale ready phase and refresh/reload agree with new work',async()=>{
+ const html=await readFile('public/index.html','utf8');let state:any={id:'a'.repeat(36),phase:'ready',runs:{},gaps:[],activation:{mode:'owner_open'}};
+ for(let reload=0;reload<2;reload++){
+  const dom=new JSDOM(html,{url:'https://chat.example.test'}),d=dom.window.document;
+  const panel=workspacePanel({document:d,currentSession:()=> '1',api:async(path:string)=>path==='/api/workspaces?session=1'?{workspaceId:state.id}:state});
+  try{await panel.configure({workspaceEnabled:true});assert.equal(d.getElementById('workspace-state')!.textContent,'Stopped');assert.match(d.getElementById('workspace-warning')!.textContent!,/Send a new project-work request/);assert.equal((d.getElementById('workspace-extend-task') as HTMLButtonElement).disabled,true);
+   state={...state,phase:'closed',activation:{mode:'automatic'}};await panel.refresh();assert.equal(d.getElementById('workspace-state')!.textContent,'Closed');assert.match(d.getElementById('workspace-warning')!.textContent!,/automatically.*Old edits are not restored/);
+   state={...state,phase:'ready',activation:{mode:'ready'}};await panel.refresh();assert.equal(d.getElementById('workspace-state')!.textContent,'Ready');assert.equal(d.getElementById('workspace-warning')!.textContent,'');
+  }finally{dom.window.dispatchEvent(new dom.window.Event('pagehide'));dom.window.close();state={...state,activation:{mode:'owner_open'}};}
+ }
+});

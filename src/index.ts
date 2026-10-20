@@ -123,9 +123,11 @@ export class Assistant extends DurableObject<Env> {
   });
   private submissions = new SubmissionAdmission(this.ctx.storage, {
     isBusy: async () => (await this.harness.sessions.list()).some((s) => s.busy),
-    submit: ({ sessionId, operationId, text }) => this.harness.submit(text, {
-      session: sessionId, operationId,
-    }),
+    captureIntent: sessionId => this.workspaces.submissionEpoch(sessionId),
+    submit: async ({ sessionId, operationId, text }, epoch) => {
+      await this.workspaces.admitNewWork(sessionId, operationId, epoch);
+      return this.harness.submit(text, { session: sessionId, operationId });
+    },
     abort: ({ sessionId, operationId }) => this.harness.abort({
       session: sessionId, operationId,
     }),
