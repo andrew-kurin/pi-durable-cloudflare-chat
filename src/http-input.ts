@@ -3,7 +3,7 @@ export class RequestError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly code?: "submission_cancelled",
+    readonly code?: "submission_cancelled" | "maintenance_paused",
   ) {
     super(message);
   }
