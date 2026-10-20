@@ -48,3 +48,4 @@ jobs:
           CHROME_EXECUTABLE="$task_chrome" node tests/mobile-reading.mjs
           CHROME_EXECUTABLE="$task_chrome" node tests/compact-identifiers.mjs
           CHROME_EXECUTABLE="$task_chrome" node tests/workspace-resume.mjs
+          CHROME_EXECUTABLE="$task_chrome" node tests/copy-controls.mjs

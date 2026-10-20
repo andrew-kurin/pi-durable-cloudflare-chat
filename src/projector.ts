@@ -318,6 +318,7 @@ export class ChatProjection {
         outputTruncated,
       } = row;
       const item: ToolActivity & { roundId?: string; linkage: ToolLinkage } = {
+        ...(row.label !== "Tool" ? {name: row.name} : {}),
         id,
         label,
         state,

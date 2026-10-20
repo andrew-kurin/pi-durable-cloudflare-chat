@@ -1,0 +1,32 @@
+import {chromium} from 'playwright-core';import {readFile,mkdir} from 'node:fs/promises';import assert from 'node:assert/strict';
+const out=process.env.PI_COPY_CAPTURE_DIR||'.runtime/copy-controls';await mkdir(out,{recursive:true});
+const browser=await chromium.launch({executablePath:process.env.CHROME_EXECUTABLE||(process.platform==='darwin'?'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome':'/usr/bin/google-chrome'),headless:true,args:['--no-sandbox']});
+const text='## Review complete\n\n**Result:** The checks passed.\n\n```js\nconst ready = true;\n```\n\n- Keep the full response\n- Preserve Markdown formatting';
+const tool={id:'call-1',name:'workspace_exec',label:'Start command',state:'success',input:'npm test\nlimitMs: 60000',output:'Test suites: 12 passed\nTests: 426 passed',context:'npm test',detail:'Completed.'};
+try{for(const [name,width,height] of [['mobile',390,844],['desktop',1280,900]]){
+ const page=await browser.newPage({viewport:{width,height}}),errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(5000);
+ await page.addInitScript(()=>{window.writes=[];window.copyMode='ok';Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.writes.push(text);if(window.copyMode==='fail')throw Error('denied');if(window.copyMode==='hold')await new Promise(resolve=>window.releaseCopy=resolve);}}});window.streams=[];window.EventSource=class{constructor(){window.streams.push(this);queueMicrotask(()=>this.onopen?.());}close(){}};});
+ await page.route('**/*',async route=>{const u=new URL(route.request().url());assert.equal(u.origin,'https://chat.example.test');
+  if(u.pathname==='/api/status')return route.fulfill({json:{connected:true,modelEnabled:true}});if(u.pathname==='/api/sessions')return route.fulfill({json:[{id:'1',title:'Copy response and tool details'}]});if(u.pathname==='/api/events/close')return route.fulfill({json:{closed:true}});if(u.pathname==='/favicon.ico')return route.fulfill({status:404});
+  const file=u.pathname==='/'?'index.html':u.pathname.slice(1);assert.ok(!file.includes('..'));return route.fulfill({body:await readFile('public/'+file),contentType:file.endsWith('.css')?'text/css':file.endsWith('.js')?'text/javascript':'text/html'});
+ });
+ await page.goto('https://chat.example.test');await page.waitForFunction(()=>window.streams.length);
+ const view={historyProtocol:2,failureState:null,messages:[{id:'u',role:'user',text:'Review the code'},{id:'a',role:'assistant',text,tools:[tool]}],partial:'',busy:false};
+ const emit=()=>page.evaluate(v=>window.streams.at(-1).onmessage({data:JSON.stringify(v)}),view);await emit();
+ assert.equal(await page.locator('.user .copy-button').count(),0);assert.equal(await page.getByRole('button',{name:'Copy tool details'}).isVisible(),false);
+ const response=page.getByRole('button',{name:'Copy assistant response',exact:true});await response.click();assert.equal(await page.evaluate(()=>window.writes.at(-1)),text);await page.locator('.message.assistant > .copy-control [role=status]').filter({hasText:'Copied'}).waitFor();
+ await response.click();assert.equal(await page.evaluate(()=>window.writes.length),2);await emit();assert.equal(await response.evaluate(e=>e===document.activeElement),true);
+ for(const button of await page.locator('.copy-button').all()){if(!await button.isVisible())continue;const r=await button.boundingBox();if(r)assert.ok(r.width>=44&&r.height>=44);}
+ await page.locator('.tool-row>summary').click();const copyTool=page.getByRole('button',{name:'Copy tool details'});await copyTool.click();assert.match(await page.evaluate(()=>window.writes.at(-1)),/Tool:\nworkspace_exec/);assert.ok((await page.evaluate(()=>window.writes.at(-1))).includes(tool.input));assert.ok((await page.evaluate(()=>window.writes.at(-1))).includes(tool.output));assert.equal(await page.locator('.tool-row').getAttribute('open'),'');await emit();assert.equal(await copyTool.evaluate(e=>e===document.activeElement),true);
+ await page.locator('#messages').evaluate(e=>e.scrollTop=0);await page.screenshot({path:out+'/'+name+'-expanded.png'});
+ await page.locator('.tool-row>summary').click();assert.equal(await copyTool.isVisible(),false);
+ await page.evaluate(()=>window.copyMode='fail');await response.click();await page.locator('.message.assistant > .copy-control [role=status]').filter({hasText:'Couldn’t copy'}).waitFor();
+ await page.screenshot({path:out+'/'+name+'-error.png'});
+ await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined}));await response.click();await page.locator('.message.assistant > .copy-control [role=status]').filter({hasText:'Clipboard unavailable'}).waitFor();
+ // Restore only the mocked clipboard. No host clipboard is read or written.
+ await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.writes.push(text);await new Promise(resolve=>window.releaseCopy=resolve);}}}));
+ view.partial='First streamed paragraph';view.busy=true;await emit();const partial=page.getByRole('button',{name:'Copy response so far'});await partial.click();await partial.dispatchEvent('click');assert.equal(await page.evaluate(()=>window.writes.at(-1)),view.partial);
+ view.partial+='\n\nSecond paragraph';await emit();assert.equal(await partial.evaluate(e=>e===document.activeElement),true);await page.evaluate(()=>window.releaseCopy());await page.locator('.partial [role=status]').filter({hasText:'Copied earlier version'}).waitFor();
+ view.messages.push({id:'final',role:'assistant',text:view.partial,tools:[]});view.partial='';view.busy=false;await emit();assert.equal(await page.getByRole('button',{name:'Copy assistant response',exact:true}).last().evaluate(e=>e===document.activeElement),true);
+ assert.equal(await page.evaluate(()=>getSelection().toString()),'');assert.equal(new URL(page.url()).origin,'https://chat.example.test');assert.equal(new URL(page.url()).pathname,'/');assert.equal(new URL(page.url()).searchParams.get('session'),'1');assert.deepEqual(errors,[]);await page.close();
+}console.log('PASS exact assistant Markdown / separate full tool details, repeated/pending clicks, rerender/stream completion focus, collapsed visibility, failure/unavailable feedback, 44px targets, no selection/navigation (mock clipboard, 390/1280px)');}finally{await browser.close();}

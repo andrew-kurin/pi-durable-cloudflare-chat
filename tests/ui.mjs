@@ -23,7 +23,7 @@ try{
   if(u.pathname==='/api/workspaces'){if(route.request().method()==='POST'){workspaceId=route.request().postDataJSON().workspaceId;workspaceState={id:workspaceId,phase:'ready',deadline:Date.now()+90*60000,runs:{},gaps:[]};return route.fulfill({json:workspaceState})}return route.fulfill({json:{workspaceId}})}
   if(u.pathname.startsWith('/api/workspaces/')){if(route.request().method()==='POST'){const body=route.request().postDataJSON();if(body.action==='cancel')workspaceState.phase='closed';if(body.action==='export')return route.fulfill({json:{url:'/api/workspaces/'+workspaceId+'/artifact?session=1'}});if(body.target)workspaceState.deadline+=30*60000;}return route.fulfill({json:workspaceState})}
   const file=u.pathname==='/'?'index.html':u.pathname.slice(1);
-  if(!['index.html','style.css','app.js','markdown.js','tool-activity.js','workspace.js','history-client.js','chat-session.js','history-view.js'].includes(file))return route.fulfill({status:404,body:''});
+  if(!['index.html','style.css','app.js','markdown.js','tool-activity.js','copy-control.js','workspace.js','history-client.js','chat-session.js','history-view.js'].includes(file))return route.fulfill({status:404,body:''});
   return route.fulfill({body:baseline?execFileSync('git',['show','7e4b921:public/'+file]):await readFile('public/'+file),contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html'});
  });
  const emit=async(view=finalView)=>{await page.waitForFunction(()=>window.syntheticStreams?.length>0);await page.evaluate(v=>window.syntheticStreams.at(-1).onmessage({data:JSON.stringify(v)}),view);};
