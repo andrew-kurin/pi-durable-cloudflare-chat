@@ -18,7 +18,7 @@ try{
    return route.fulfill({status,json:status===200?{accepted:true}:{error:'Temporary transport failure'}});
   }
   if(u.pathname==='/favicon.ico')return route.fulfill({status:404});
-  const file=u.pathname==='/'?'index.html':u.pathname.slice(1);assert.ok(['index.html','app.js','history-client.js','chat-session.js','history-view.js','workspace.js','markdown.js','tool-activity.js','style.css'].includes(file));
+  const file=u.pathname==='/'?'index.html':u.pathname.slice(1);assert.ok(['index.html','app.js','history-client.js','chat-session.js','history-view.js','workspace.js','markdown.js','tool-activity.js','copy-control.js','style.css'].includes(file));
   return route.fulfill({body:await readFile('public/'+file),contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html'});
  });
  await page.goto('https://chat.example.test/');await page.waitForFunction(()=>window.streams.length>0);assert.equal(await page.locator('#current-chat-title').textContent(),'Second');

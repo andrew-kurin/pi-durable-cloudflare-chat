@@ -1,3 +1,4 @@
+import {copyControl,toolClipboardText} from './copy-control.js';
 const states = {
   pending: "Pending",
   running: "Running",
@@ -40,7 +41,7 @@ function compactContext(label, context) {
   return context.split(" · ").map(value => /^(?:[a-f0-9]{32,64}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.test(value)
     ? value.slice(0, 8) + "…" + value.slice(-8) : value).join(" · ");
 }
-export function toolActivity(document, tools, expanded, onToggle) {
+export function toolActivity(document, tools, expanded, onToggle, scope = '') {
   const list = document.createElement("div");
   list.className = "tool-activities";
   list.setAttribute("aria-label", "Tool activity");
@@ -179,6 +180,7 @@ export function toolActivity(document, tools, expanded, onToggle) {
         detail.textContent = detailText;
         evidence.append(detail);
       }
+      evidence.append(copyControl(document, JSON.stringify([scope, 'tool', tool.id]), toolClipboardText(tool), 'Copy tool details'));
       summary.addEventListener("click", () => onToggle(tool.id, !row.open));
       row.append(summary, evidence);
       row.addEventListener("toggle", () => onToggle(tool.id, row.open));

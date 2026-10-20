@@ -1,3 +1,4 @@
+import {copyControl} from '../public/copy-control.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
@@ -17,7 +18,7 @@ async function browser(f:Awaited<ReturnType<typeof fixture>>) {
  w.createHistoryClient=(options:any)=>createHistoryClient({...options,platform:w});
  w.historyPresentation=historyPresentation;w.renderMarkdown=renderMarkdown;w.toolActivity=toolActivity;
  w.EventSource=class {close(){}};
- w.eval((await readFile('public/app.js','utf8')).replace(/^import .*\n/gm,''));
+ w.copyControl=copyControl;w.eval((await readFile('public/app.js','utf8')).replace(/^import .*\n/gm,''));
  // Initialization is observable in the rendered view, not a private controller hook.
  for(let i=0;i<100&&w.document.getElementById('current-chat-title').textContent!=='First';i++)await new Promise(r=>setTimeout(r,10));
  assert.equal(w.document.getElementById('current-chat-title').textContent,'First');

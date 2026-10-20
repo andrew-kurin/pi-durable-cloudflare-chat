@@ -1,3 +1,4 @@
+import {copyControl} from '../public/copy-control.js';
 import {createChatSession} from '../public/chat-session.js';
 import {historyPresentation} from '../public/history-view.js';
 import {createHistoryClient} from '../public/history-client.js';
@@ -20,7 +21,7 @@ async function browser(){
  w.createChatSession=(options:any)=>createChatSession({...options,platform:w});w.historyPresentation=historyPresentation;w.createHistoryClient=(options:any)=>createHistoryClient({...options,platform:w});w.renderMarkdown=renderMarkdown;w.toolActivity=toolActivity;
  w.EventSource=class{onmessage:any;close(){}constructor(){stream=this}};
  w.fetch=async(path:string,options:any)=>{assert.ok(!options?.method||options.method==='GET');requests.push(path);return {ok:true,json:async()=>path==='/api/sessions'?[{id:'1',title:'Great'}]:{connected:true,modelEnabled:true}}};
- w.eval(script);await new Promise(r=>setTimeout(r,0));
+ w.copyControl=copyControl;w.eval(script);await new Promise(r=>setTimeout(r,0));
  return {dom,requests,send:(p:ChatProjection)=>stream.onmessage({data:JSON.stringify(p.view())})};
 }
 test('actual chat UI displays terminal model error after workspace tool results and reload without submitting again',async()=>{

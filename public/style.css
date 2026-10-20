@@ -68,3 +68,4 @@ a:focus-visible{outline:3px solid #245e4a;outline-offset:3px}
 #form:has(textarea:focus-visible){outline:3px solid #245e4a;outline-offset:2px}
 
 .tool-context.tool-context-compact{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;-webkit-line-clamp:1}
+.copy-control{display:flex;align-items:center;gap:6px;min-height:44px;margin-top:4px}.copy-button{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:10px;background:transparent;color:#53634f;border:0;border-radius:8px}.copy-button:hover{background:#edf0e6}.copy-feedback{font-size:12px;color:#53634f;line-height:1.4}.copy-control[data-copy-state=error] .copy-feedback{color:#8b4530}.tool-evidence>.copy-control{margin-top:6px}

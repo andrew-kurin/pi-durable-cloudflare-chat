@@ -20,6 +20,7 @@ export interface ToolSource {
   url: string;
 }
 export interface ToolActivity {
+  name?: string;
   id: string;
   label: string;
   state: ToolState;
