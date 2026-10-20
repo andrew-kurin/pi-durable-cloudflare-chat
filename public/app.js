@@ -62,7 +62,7 @@ async function restoreChat(id,select){try{await chatSession.restore(id,select);a
 $('chat-undo').onclick=async()=>{const action=undo;if(!action)return;$('chat-undo').disabled=true;try{await restoreChat(action.id,action.wasActive)}finally{$('chat-undo').disabled=false;}};
 $('new').onclick=async()=>{if($('new').disabled)return;try{$('new').disabled=true;chatSession.editDraft($('prompt').value);await chatSession.create();}catch(e){$('history-error').textContent=e.message;notice(e.message);}finally{$('new').disabled=false}};
 function beginRename(id){renameTarget=id;$('title-input').value=chats.find(c=>c.id===id)?.title||'';$('title-error').textContent='';$('title-dialog').showModal();$('title-input').focus();$('title-input').select();}
-$('form').onsubmit=async e=>{e.preventDefault();chatSession.editDraft($('prompt').value);const submittedSession=session;try{await chatSession.submit();}catch(err){if(session===submittedSession)$('activity').textContent=err.message}};
+$('form').onsubmit=async e=>{e.preventDefault();chatSession.editDraft($('prompt').value);const submittedSession=session;try{await chatSession.submit();void workspaces.refresh();}catch(err){if(session===submittedSession)$('activity').textContent=err.message}};
 $('title-dialog').addEventListener('close',()=>{if($('history-drawer').open)$('history-close').focus({preventScroll:true});else $('history-open').focus({preventScroll:true});});
 $('title-cancel').onclick=()=>$('title-dialog').close();
 $('title-form').onsubmit=async e=>{e.preventDefault();const target=renameTarget;try{await chatSession.rename(target,$('title-input').value);$('title-dialog').close();if(target===session)open();}catch(e){$('title-error').textContent=e.message}};

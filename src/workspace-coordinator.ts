@@ -26,6 +26,12 @@ type Predecessor = {
   notice: string;
 };
 type Binding = { workspaceId: string; fingerprint: string };
+type StopIntent = {
+  epoch?: string;
+  blocked: boolean;
+  resumeWorkspaceId?: string;
+  cleanupWorkspaceId?: string;
+};
 export class WorkspaceCoordinator {
   private tail: Promise<unknown> = Promise.resolve();
   private starts = new Map<string, Promise<State>>();
@@ -35,9 +41,32 @@ export class WorkspaceCoordinator {
     return next;
   }
   private stopped(session: string) {
-    return this.store.get<{ epoch?: string; blocked: boolean }>(
+    return this.store.get<StopIntent>(
       "workspace-auto-stop:" + session,
     );
+  }
+  async submissionEpoch(session: string) {
+    return (await this.stopped(session))?.epoch;
+  }
+  /** Called only at the admitted owner-message boundary, never by tools or polling.
+   * Record once per submission so receipt retries cannot undo a later Stop.
+   * Keep the stop epoch: already waiting activations must remain cancelled.
+   */
+  async admitNewWork(session: string, operationId: string, epoch?: string) {
+    if (!this.enabled()) return;
+    await this.requireChat(session);
+    await this.store.transaction(async tx => {
+      const key = "workspace-submission:" + session + ":" + operationId;
+      const intent = await tx.get<StopIntent>("workspace-auto-stop:" + session);
+      if (intent?.epoch !== epoch) throw new RequestError(409, "Workspace was stopped after this request arrived. Send a new request to resume.", "submission_cancelled");
+      if (await tx.get(key)) return;
+      const workspaceId = await tx.get<string>("workspace-session:" + session);
+      await tx.put(key, true);
+      await tx.put("workspace-auto-stop:" + session, {
+        ...intent, blocked: false, resumeWorkspaceId: workspaceId,
+        cleanupWorkspaceId: intent?.blocked ? workspaceId : intent?.cleanupWorkspaceId,
+      });
+    });
   }
   private async stopAutomation(session: string, id: string) {
     await this.store.transaction(async (tx) => {
@@ -100,7 +129,7 @@ export class WorkspaceCoordinator {
       if (!refuse) return this.state(id);
       throw new RequestError(
         409,
-        "Workspace startup was cancelled. Open a workspace explicitly to resume.",
+        "Workspace startup was cancelled. Send a new request to resume project work.",
       );
     }
   }
@@ -109,6 +138,7 @@ export class WorkspaceCoordinator {
     id: string,
     manual: boolean,
     predecessor?: Predecessor,
+    expected?: {epoch?: string},
   ) {
     const intent = await this.stopped(session);
     const old = await this.store.get<string>("workspace-session:" + session);
@@ -135,13 +165,15 @@ export class WorkspaceCoordinator {
         );
     }
     await this.store.transaction(async (tx) => {
-      const latest = await tx.get<{ epoch?: string; blocked: boolean }>(
+      const latest = await tx.get<StopIntent>(
         "workspace-auto-stop:" + session,
       );
+      if (expected && latest?.epoch !== expected.epoch)
+        throw new RequestError(409, "Workspace was stopped; activation cancelled and no operation was started.");
       if (latest?.blocked && (!manual || latest.epoch !== intent?.epoch))
         throw new RequestError(
           409,
-          "Workspace was stopped. Open a workspace explicitly to resume.",
+          "Workspace was stopped. Send a new request to resume project work, or open a workspace explicitly.",
         );
       if (manual)
         await tx.put("workspace-auto-stop:" + session, {
@@ -207,9 +239,10 @@ export class WorkspaceCoordinator {
       !input.workspaceId ||
       (await this.store.get<string>("workspace-session:" + session)) ===
         state?.id;
+    const intent = await this.stopped(session);
     const stopped =
-      (await this.stopped(session))?.blocked ||
-      (targetsCurrent &&
+      intent?.blocked ||
+      (targetsCurrent && intent?.resumeWorkspaceId !== state?.id &&
         ["cancelled", "interrupted", "initialization-failed"].includes(
           state?.stopReason ?? "",
         ));
@@ -220,7 +253,7 @@ export class WorkspaceCoordinator {
         : phase === "initializing" || phase === "stopping"
           ? "wait"
           : phase === "ready"
-            ? "ready"
+            ? intent?.cleanupWorkspaceId === state?.id ? "automatic" : "ready"
             : "automatic";
     const nextStep =
       mode === "automatic"
@@ -231,7 +264,7 @@ export class WorkspaceCoordinator {
             ? "Wait for workspace setup or cleanup, then check status. Do not restart or replay commands."
             : mode === "explicit_target_closed"
               ? "This explicitly targeted workspace is closed. Keep its historical processes/artifacts associated with it; do not silently retarget. For already authorized new project work, omit workspaceId on a new read/edit/exec call; that tool still enforces the current workspace cancellation/startup restrictions."
-              : "The workspace was explicitly stopped or setup was interrupted/failed. The owner must explicitly open a workspace before new work; do not undo cancellation or replay commands.";
+              : "The workspace was stopped or setup was interrupted/failed. Send a new project-work request to allow automatic activation, or open a workspace explicitly. Do not replay stopped commands.";
     const runs = Object.fromEntries(
       Object.entries(state?.runs ?? {}).map(([id, run]) => [
         id,
@@ -295,18 +328,25 @@ export class WorkspaceCoordinator {
           throw new RequestError(400, "Invalid operation ID");
         await this.stopAutomation(session, id);
       }
-      return stub.request({ ...input, workspaceId: id } as WorkspaceRequest);
+      const result = await stub.request({ ...input, workspaceId: id } as WorkspaceRequest);
+      return input.action === "cancel"
+        ? this.statusResult(session, statusRequest(id), result as State)
+        : result;
     }
     if (!/^[a-f0-9]{64}$/.test(input.operationId))
       throw new RequestError(400, "Invalid operation ID");
+    const arrivalIntent = await this.stopped(session);
     const fingerprint = await this.fingerprint(input),
       key = "workspace-activation-op:" + session + ":" + input.operationId;
     const plan = await this.serial(async () => {
       await this.requireChat(session);
-      if ((await this.stopped(session))?.blocked)
+      const intent = await this.stopped(session);
+      if (intent?.epoch !== arrivalIntent?.epoch)
+        throw new RequestError(409, "Workspace was stopped; activation cancelled and no operation was started.");
+      if (intent?.blocked || arrivalIntent?.blocked)
         throw new RequestError(
           409,
-          "Workspace was stopped. Open a workspace explicitly to resume.",
+          "Workspace was stopped. Send a new request to resume project work, or open a workspace explicitly.",
         );
       const binding = await this.store.get<Binding>(key);
       if (binding && binding.fingerprint !== fingerprint)
@@ -321,7 +361,13 @@ export class WorkspaceCoordinator {
         await this.owned(session, id);
         startup = this.starts.get(id);
         if (!startup) {
-          const state = await this.state(id);
+          // A stop may have persisted before its guest RPC completed. Do not
+          // let a stale ready guest hide that intent or receive new work.
+          let state = await this.state(id);
+          if (intent?.cleanupWorkspaceId === id && intent.epoch && state.phase === "ready") {
+            await this.stub(id).request({workspaceId:id, action:"cancel", operationId: await this.fingerprint({action:"cancel", workspaceId:id, operationId:"resume-cleanup:" + intent.epoch})});
+            state = await this.state(id);
+          }
           if (state.phase === "initializing") startup = this.start(session, id);
           else if (state.phase === "closed" && !binding) {
             if (input.workspaceId)
@@ -329,14 +375,14 @@ export class WorkspaceCoordinator {
                 409,
                 "Explicit workspace is closed; its identity was not retargeted. For new authorized project work, make a new read/edit/exec call and omit workspaceId for automatic activation. Old edits will not be restored; previous artifacts remain available.",
               );
-            if (
+            if (intent?.resumeWorkspaceId !== id && (
               state.stopReason === "cancelled" ||
               state.stopReason === "initialization-failed" ||
               state.stopReason === "interrupted"
-            )
+            ))
               throw new RequestError(
                 409,
-                "Previous workspace is closed and may contain work. Open a new workspace explicitly; saved artifacts remain available.",
+                "Previous workspace is closed and may contain work. Send a new request to allow a fresh workspace; saved artifacts remain available.",
               );
             predecessor = {
               previousWorkspaceId: id,
@@ -354,7 +400,7 @@ export class WorkspaceCoordinator {
       }
       if (!id) {
         id = crypto.randomUUID();
-        await this.reserve(session, id, false, predecessor);
+        await this.reserve(session, id, false, predecessor, {epoch: arrivalIntent?.epoch});
         startup = this.start(session, id);
       }
       if (!binding) await this.store.put(key, { workspaceId: id, fingerprint });
@@ -364,7 +410,7 @@ export class WorkspaceCoordinator {
         predecessor:
           predecessor ??
           (await this.store.get<Predecessor>("workspace-predecessor:" + id)),
-        epoch: (await this.stopped(session))?.epoch,
+        epoch: arrivalIntent?.epoch,
       };
     });
     let activating = !!plan.startup;
@@ -376,7 +422,7 @@ export class WorkspaceCoordinator {
         if (state.phase !== "ready")
           throw new RequestError(
             503,
-            "Workspace startup failed; no tool operation ran. Open a workspace explicitly to try again.",
+            "Workspace startup failed; no tool operation ran. Send a new request or open a workspace explicitly to try again.",
           );
         await progress?.("ready", !!plan.predecessor);
         activating = false;
@@ -433,7 +479,10 @@ export class WorkspaceCoordinator {
         throw new RequestError(400, "Invalid operation ID");
       await this.stopAutomation(session, id);
     }
-    return stub.request({ workspaceId: id, action, operationId });
+    const result = await stub.request({ workspaceId: id, action, operationId });
+    return action === "cancel"
+      ? this.statusResult(session, statusRequest(id), result as State)
+      : result;
   }
   async extend(
     session: string,

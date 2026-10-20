@@ -887,3 +887,55 @@ test("waiting through coordinator does not block cancellation, regular status or
   await f.expire(id);
   assert.equal(((await f.coordinator.status("1", id)) as any).phase, "closed");
 });
+
+test('later admitted new work replaces a cancelled guest once; reload and receipt replay cannot undo a newer Stop',async()=>{
+ const f=fixture();await f.coordinator.open('1',oldId);await f.coordinator.ownerAction('1',oldId,'cancel',op(1));await f.expire(oldId);
+ const epoch=await f.coordinator.submissionEpoch('1');await f.coordinator.admitNewWork('1','new-owner-request',epoch);
+ assert.equal(f.counts.opens,1,'admission alone must not start compute');
+ const next=f.create();const result=await next.execute('1',{action:'read',path:'package.json',operationId:op(2)}) as any;
+ assert.equal(f.counts.opens,2);assert.equal(f.counts.reads,1);assert.equal(result.freshWorkspace.previousWorkspaceId,oldId);assert.match(result.freshWorkspace.notice,/Old edits were not restored/);
+ const current=f.data.get('workspace-session:1');await next.ownerAction('1',current,'cancel',op(3));
+ await assert.rejects(f.create().admitNewWork('1','new-owner-request',epoch),/stopped after this request/);
+ await assert.rejects(f.create().execute('1',{action:'read',path:'package.json',operationId:op(4)}),/stopped/);
+ assert.equal(f.counts.opens,2);
+ await assert.rejects(f.create().admitNewWork('1','queued-before-stop',epoch),/stopped after this request/);
+});
+
+test('activation paused after ready cannot dispatch across Stop plus a later admitted request',async()=>{
+ const f=fixture(),entered=deferred(),held=deferred();
+ const original=f.coordinator.execute('1',{action:'exec',argv:['npm','test'],operationId:op(1)},async phase=>{if(phase==='ready'){entered.resolve();await held.promise;}});
+ const rejected=assert.rejects(original,/cancelled/);await entered.promise;
+ const old=f.data.get('workspace-session:1');await f.coordinator.ownerAction('1',old,'cancel',op(2));await f.expire(old);
+ await f.coordinator.admitNewWork('1','later-work',await f.coordinator.submissionEpoch('1'));
+ const result=await f.coordinator.execute('1',{action:'read',path:'a',operationId:op(3)}) as any;
+ held.resolve();await rejected;assert.equal(f.counts.dispatches,0);assert.equal(f.counts.reads,1);assert.equal(result.freshWorkspace.previousWorkspaceId,old);
+ await assert.rejects(f.create().execute('1',{action:'exec',argv:['npm','test'],operationId:op(1)}),/not active/);assert.equal(f.counts.dispatches,0);
+});
+
+test('stale Ready plus durable stop reports blocked, then cleans up before accepting new work',async()=>{
+ const f=fixture();await f.coordinator.open('1',oldId);
+ await f.store.put('workspace-auto-stop:1',{epoch:'stop-generation',blocked:true});
+ const blocked=await f.coordinator.status('1',oldId);assert.equal(blocked.phase,'ready');assert.equal(blocked.activation.mode,'owner_open');
+ await f.coordinator.admitNewWork('1','resume-stale','stop-generation');
+ await assert.rejects(f.coordinator.execute('1',{action:'read',path:'a',operationId:op(1)}),/stopping/);
+ assert.equal(f.counts.reads,0);await f.expire(oldId);
+ const resumed=await f.create().execute('1',{action:'read',path:'a',operationId:op(2)}) as any;assert.equal(resumed.freshWorkspace.previousWorkspaceId,oldId);assert.equal(f.counts.reads,1);
+ // A subsequent message in the healthy successor must reuse it, not stop it.
+ await f.coordinator.admitNewWork('1','follow-up','stop-generation');await f.coordinator.execute('1',{action:'read',path:'b',operationId:op(3)});assert.equal(f.counts.opens,2);assert.equal(f.counts.reads,2);
+});
+
+test('interrupted and failed setup need a new owner request and only that predecessor may be replaced',async()=>{
+ for(const reason of ['interrupted','initialization-failed']){
+  const f=fixture();await f.coordinator.open('1',oldId);await f.expire(oldId);f.guests.get(oldId)!.data.get('state').stopReason=reason;
+  await assert.rejects(f.coordinator.execute('1',{action:'read',path:'a',operationId:op(1)}),/closed/);
+  await f.coordinator.admitNewWork('1','new-work');await f.coordinator.execute('1',{action:'read',path:'a',operationId:op(2)});assert.equal(f.counts.opens,2);assert.equal(f.counts.reads,1);
+ }
+});
+
+test('Stop and a later request cannot revive an older replacement paused inside reservation',async()=>{
+ const f=fixture();await f.coordinator.open('1',oldId);await f.expire(oldId);
+ let checks=0;const entered=deferred(),held=deferred();f.check(async()=>{if(++checks===2){entered.resolve();await held.promise;}});
+ const original=f.coordinator.execute('1',{action:'exec',argv:['npm','test'],operationId:op(1)});const rejected=assert.rejects(original,/cancelled/);await entered.promise;
+ await f.coordinator.ownerAction('1',oldId,'cancel',op(2));await f.coordinator.admitNewWork('1','newer-request',await f.coordinator.submissionEpoch('1'));
+ held.resolve();await rejected;assert.equal(f.counts.opens,1);assert.equal(f.counts.dispatches,0);
+});
