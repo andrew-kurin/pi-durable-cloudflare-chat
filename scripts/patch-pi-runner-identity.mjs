@@ -2,7 +2,7 @@
 // explicit runner provider. Hooks swallow failures and cannot enforce dispatch.
 import { readFile, writeFile } from 'node:fs/promises';
 const root = new URL('../node_modules/@earendil-works/pi-durable/', import.meta.url);
-if (JSON.parse(await readFile(new URL('package.json', root), 'utf8')).version !== '1.1.0') throw Error('Review runner identity patch before upgrading Pi');
+if (JSON.parse(await readFile(new URL('package.json', root), 'utf8')).version !== '1.3.0') throw Error('Review runner identity patch before upgrading Pi');
 const path = new URL('dist/harness/generation.js', root);
 const original = `            const options = {
                 ...streamOptions,
@@ -22,7 +22,7 @@ if (source.includes(patched)) console.log('Pi runner identity patch already appl
 else {
  if (source.split(original).length !== 2) throw Error('Unexpected Pi generation source; identity patch not applied');
  await writeFile(path, source.replace(original, patched));
- console.log('Applied Pi 1.1.0 durable runner identity patch');
+ console.log('Applied Pi 1.3.0 durable runner identity patch');
 }
 // Compaction has its own durable task/checkpoint and needs the same no-replay boundary.
 const compactPath = new URL('dist/harness/compaction.js', root);
@@ -42,5 +42,5 @@ if (compactSource.includes(compactPatched)) console.log('Pi compaction identity 
 else {
  if (compactSource.split(compactOriginal).length !== 2) throw Error('Unexpected Pi compaction source; identity patch not applied');
  await writeFile(compactPath, compactSource.replace(compactOriginal, compactPatched));
- console.log('Applied Pi 1.1.0 compaction identity patch');
+ console.log('Applied Pi 1.3.0 compaction identity patch');
 }

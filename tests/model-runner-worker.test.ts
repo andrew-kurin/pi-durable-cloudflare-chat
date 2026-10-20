@@ -29,7 +29,7 @@ async function fixture(backend:typeof fakeBackend=fakeBackend){
  const models=()=>guardModels(createChatModels(credentialStore,createWorkerRunnerProvider(config,persisted as any,'durable-object-fixture',transport)),async()=>{});
  return{persisted,journal,calls,wire,models,dispose:async()=>{server.closeAllConnections();await new Promise<void>(ok=>server.close(()=>ok()));}};
 }
-const registry=()=>{const r=createRegistry();r.install(defineExtension({name:'runner-fixture-tool',tools:[defineTool({name:'test_status',description:'offline marker',parameters:Type.Object({}),replay:'safe',execute:async()=>({content:[{type:'text',text:'offline-marker'}]})})]}));return r;};
+const registry=()=>{const r=createRegistry();r.install(defineExtension({name:'runner-fixture-tool',tools:[defineTool({name:'test_status',description:'offline marker',parameters:Type.Object({}),replay:'safe',execute:async()=>({output:[{type:'text',text:'offline-marker'}]})})]}));return r;};
 const open=async(storage:any,models:any)=>Harness.open(storage,{models,registry:registry(),settings:{compaction:{enabled:false},retry:{enabled:true,maxRetries:1,baseDelayMs:1},stream:{maxRetries:0}}},context);
 const retain=(s:MemoryStorage)=>new Proxy(s,{get(t,k){if(k==='close')return async()=>{};const v=Reflect.get(t,k);return typeof v==='function'?v.bind(t):v;}});
 test('actual pinned Harness carries durable task identity; tool continuation gets a new round; input replay after reconstruction never dispatches', {timeout:10000},async()=>{

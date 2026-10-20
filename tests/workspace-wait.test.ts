@@ -265,7 +265,7 @@ test("tool recovery reuses its memoized deadline and never gives a resumed wait 
     api as any,
     BACKGROUND_CONTEXT,
   );
-  const data = JSON.parse((result.content![0] as any).text).data;
+  const data = JSON.parse((result.output![0] as any).text).data;
   assert.equal(data.outcome, "unavailable");
   assert.equal(data.status, undefined);
   assert.equal(data.waitedMs, 0);

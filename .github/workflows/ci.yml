@@ -24,6 +24,12 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
+      - name: Offline Pi 1.1 rollback and restore rehearsal
+        run: |
+          task_pi_legacy=$(mktemp -d)
+          trap 'rm -rf "$task_pi_legacy"' EXIT
+          npm install --prefix "$task_pi_legacy" --ignore-scripts --no-audit --no-fund --save-exact @earendil-works/pi-durable@1.1.0 @earendil-works/pi-ai@1.1.0 @earendil-works/chord@1.1.0 @earendil-works/pi-telemetry@1.1.0
+          node tests/pi-rollback-rehearsal.mjs "$task_pi_legacy"
       - run: node --check public/app.js
       - run: npm run build
 
