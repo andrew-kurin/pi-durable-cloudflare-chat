@@ -145,6 +145,12 @@ Synthetic Pi tool conformance precedes the lifecycle/file/process implementation
 
 Final local candidate checks: all 97 offline tests pass, along with typecheck, JavaScript syntax, the default-disabled Wrangler dry-run, opt-in configuration binding generation and mobile/desktop owner-panel fixtures. Independent review found no remaining material blockers after setup cancellation and bounded stop/capture fixes.
 
+## History SSE backpressure — issue #54, local verification
+
+The new unread-consumer regression fails on base `13a6633fcea67f7ac7da948174aa9a4393a36617`: ten updates queue eleven full-history frames. With coalescing, a synthetic 64-message transcript retains one 265,756-byte encoded frame at ten, one hundred and two thousand unread updates. Pending updates change only the existing projection and a dirty flag. After explicit close or lease expiry, reading yields the intact initial snapshot and final history with `busy: false`, then EOF; only two frames are serialized. This bounds copies by transcript size, not a fixed absolute byte budget.
+
+Ten new tests cover unread and slow consumers, waiting readers, latest partial/terminal delivery, cancellation, request abort, explicit close, lease expiry, overlapping cleanup, late callbacks, cancellation during asynchronous snapshot replay and synchronous source setup failure. The full suite passes all 439 tests, including existing authenticated workerd history lifecycle tests. Strict typecheck, browser JavaScript syntax, UI bundle consistency, Wrangler dry-run and the hermetic mobile/desktop browser smoke pass. No production, Spark, provider call or deployment was used; native deployed buffering behavior remains unmeasured.
+
 ## Pi 1.3.0 compatibility migration — 2026-10-20
 
 Prepared in an isolated checkout from main `13a6633fcea67f7ac7da948174aa9a4393a36617`, without accessing production, Spark, credentials or live inference. Direct Pi/Chord pins are exactly 1.3.0; Agents remains 0.28.0. Both version/source-checked safety patches apply after clean install and are idempotent. Tool envelopes, legacy cache/memo boundaries, safe compaction/session failure projection and explicit Agents-cache disposal/reopen are covered.

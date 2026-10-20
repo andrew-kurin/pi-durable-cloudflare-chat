@@ -78,6 +78,7 @@ export class HistoryFeed {
     let ended = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let flush = () => {};
     const onAbort = () => {
       void stop();
     };
@@ -88,9 +89,7 @@ export class HistoryFeed {
       this.activeStreams--;
       if (id && this.streamStops.get(id) === stop) this.streamStops.delete(id);
       request.signal.removeEventListener("abort", onAbort);
-      try {
-        controller?.close();
-      } catch {}
+      flush();
       try {
         await events?.stop();
       } catch (error) {
@@ -104,47 +103,72 @@ export class HistoryFeed {
         await events.stop();
         return new Response(null, { status: 204 });
       }
-      const projection = new ChatProjection();
+      let projection: ChatProjection | undefined = new ChatProjection();
       projection.apply(await fullHistorySnapshot(this.harness,sid,events.snapshot));
       const title = await this.chatCatalog.title(sid);
       if (ended) return new Response(null, { status: 204 });
       const encoder = new TextEncoder();
       const source = events;
+      // Keep one encoded frame in the readable queue. Further batches update
+      // only the projection and this flag, without copying/encoding history.
+      let dirty = true;
+      flush = () => {
+        if (!controller || !projection) return;
+        if (dirty && controller.desiredSize! > 0) {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(this.frame(projection, title))}\n\n`),
+          );
+          dirty = false;
+        }
+        // Release the lease/source immediately on stop, but let a reader drain
+        // the initial frame and latest state even after close or lease expiry.
+        if (ended && !dirty) {
+          controller.close();
+          controller = undefined;
+          projection = undefined;
+        }
+      };
       const body = new ReadableStream<Uint8Array>({
         start: (c) => {
           controller = c;
-          const send = () => {
-            if (!ended)
-              controller!.enqueue(
-                encoder.encode(
-                  `data: ${JSON.stringify(this.frame(projection, title))}\n\n`,
-                ),
-              );
-          };
-          send();
-          source.start(async (batch) => {
-            for(const event of batch)projection.apply(event.type==='snapshot'?await fullHistorySnapshot(this.harness,sid,event):event);
-            send();
-          });
+          flush();
+          timer = setTimeout(() => {
+            void stop();
+          }, 55000);
+          request.signal.addEventListener("abort", onAbort, { once: true });
+          if (request.signal.aborted) void stop();
           void source.closed?.then(async end => {
             if (ended) return;
             if (end.reason === 'session_failed') {
-              projection.sessionFailed();
-              send();
+              projection!.sessionFailed();
+              dirty = true;
             }
             await stop();
           }).catch(error => {
             logTechnicalError('request', error, crypto.randomUUID());
             void stop();
           });
-          timer = setTimeout(() => {
-            void stop();
-          }, 55000);
-          request.signal.addEventListener("abort", onAbort, { once: true });
-          if (request.signal.aborted) void stop();
+          if (!ended) source.start(async (batch) => {
+            for (const event of batch) {
+              if (ended) return;
+              const next = event.type === 'snapshot'
+                ? await fullHistorySnapshot(this.harness, sid, event)
+                : event;
+              if (ended) return;
+              projection!.apply(next);
+              dirty = true;
+            }
+            flush();
+          });
         },
-        cancel: () => stop(),
-      });
+        pull: () => flush(),
+        cancel: () => {
+          dirty = false;
+          projection = undefined;
+          controller = undefined;
+          return stop();
+        },
+      }, { highWaterMark: 1 });
       return new Response(body, {
         headers: {
           "Content-Type": "text/event-stream",
