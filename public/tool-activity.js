@@ -33,6 +33,13 @@ function sourceUrl(raw) {
     return null;
   }
 }
+// Compact only identifier-only context fields on workspace observation/control tools.
+// Full inputs/results stay unchanged for inspection and native selection/copy.
+function compactContext(label, context) {
+  if (!["Wait for command", "Workspace status", "Process status", "Read logs", "Cancel workspace"].includes(label)) return context;
+  return context.split(" · ").map(value => /^(?:[a-f0-9]{32,64}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/i.test(value)
+    ? value.slice(0, 8) + "…" + value.slice(-8) : value).join(" · ");
+}
 export function toolActivity(document, tools, expanded, onToggle) {
   const list = document.createElement("div");
   list.className = "tool-activities";
@@ -98,7 +105,13 @@ export function toolActivity(document, tools, expanded, onToggle) {
       if (typeof tool.context === "string" && tool.context) {
         const context = document.createElement("span");
         context.className = "tool-context";
-        context.textContent = tool.context.slice(0, 360);
+        const fullContext = tool.context.slice(0, 360);
+        context.textContent = compactContext(label.textContent, fullContext);
+        if (context.textContent !== fullContext) {
+          context.classList.add("tool-context-compact");
+          context.title = fullContext;
+          context.setAttribute("aria-label", fullContext);
+        }
         summary.append(context);
       }
       const preview = document.createElement("span");
@@ -134,6 +147,8 @@ export function toolActivity(document, tools, expanded, onToggle) {
           evidence.append(note);
         }
       };
+      if (typeof tool.context === "string" && compactContext(label.textContent, tool.context) !== tool.context && !tool.input)
+        section("Identifier", tool.context.slice(0, 360), tool.context.length > 360);
       if (typeof tool.input === "string" && tool.input)
         section("Input", tool.input.slice(0, 4000), tool.inputTruncated);
       if (typeof tool.output === "string" && tool.output.length)

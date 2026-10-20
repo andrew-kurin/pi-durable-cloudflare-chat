@@ -28,3 +28,18 @@ test('source evidence remains inert, isolates external tabs and rejects unsafe o
  d.querySelector('main')!.append(toolActivity(d,[{id:'one',label:'Web search',state:'success',summary:'<script>inert</script>',sources,detail:'Duration: 1s.'}],new Set(),()=>{}));
  assert.equal(d.querySelectorAll('a').length,1);assert.equal(d.querySelector('img,script'),null);assert.equal(d.querySelector('a')!.getAttribute('rel'),'noopener noreferrer');assert.equal(d.querySelector('a')!.target,'_blank');assert.match(d.querySelector('.tool-preview')!.textContent!,/<script>/);dom.window.close();
 });
+
+test('workspace run ID previews are compact while full input/output and accessible context remain exact',()=>{
+ const id='0123456789abcdef'.repeat(4),dom=new JSDOM(),d=dom.window.document;
+ const input=JSON.stringify({runId:id},null,2),output=JSON.stringify({id,state:'running'},null,2);
+ d.body.append(toolActivity(d,[{id:'wait',label:'Wait for command',state:'success',context:id,input,output,summary:'Command still running.'},{id:'logs',label:'Read logs',state:'success',context:id+' · stdout',input,output},{id:'command',label:'Start command',state:'success',context:'echo '+id,input:'echo '+id}],new Set(['wait']),()=>{}));
+ const contexts=d.querySelectorAll('.tool-context');assert.equal(contexts[0].textContent,'01234567…89abcdef');assert.equal(contexts[0].getAttribute('title'),id);assert.equal(contexts[0].getAttribute('aria-label'),id);assert.equal(contexts[1].textContent,'01234567…89abcdef · stdout');assert.equal(contexts[2].textContent,'echo '+id);
+ assert.equal(d.querySelector('.tool-input')!.textContent,input);assert.equal(d.querySelector('.tool-output')!.textContent,output);
+ const range=d.createRange();range.selectNodeContents(d.querySelector('.tool-input')!);d.getSelection()!.removeAllRanges();d.getSelection()!.addRange(range);assert.equal(d.getSelection()!.toString(),input);dom.window.close();
+});
+test('short IDs and unrelated tool content are not abbreviated',()=>{
+ const dom=new JSDOM(),d=dom.window.document,id='a'.repeat(64);
+ d.body.append(toolActivity(d,[{id:'short',label:'Wait for command',state:'success',context:'run-1'},{id:'read',label:'Read file',state:'success',context:id}],new Set(),()=>{}));assert.deepEqual([...d.querySelectorAll('.tool-context')].map(n=>n.textContent),['run-1',id]);dom.window.close();
+});
+
+test('legacy identifier-only cards still reveal the full value inside their disclosure',()=>{const dom=new JSDOM(),d=dom.window.document,id='abcdef01'.repeat(8);d.body.append(toolActivity(d,[{id:'legacy',label:'Process status',state:'success',context:id}],new Set(['legacy']),()=>{}));assert.equal(d.querySelector('.tool-identifier')!.textContent,id);dom.window.close();});
