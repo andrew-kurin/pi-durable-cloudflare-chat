@@ -43,7 +43,7 @@ function fixture(t: TestContext) {
   const serializedSizes: number[] = [];
   t.mock.method(feed as any, 'frame', function (...args: unknown[]) {
     const value = frame.apply(feed, args);
-    serializedSizes.push(Buffer.byteLength('data: ' + JSON.stringify(value) + '\n\n'));
+    serializedSizes.push(Buffer.byteLength('data: ' + JSON.stringify(value) + '\nid: hv1-' + '0'.repeat(64) + '\n\n'));
     return value;
   });
   // Inspect the actual Web Streams queue, without adding production diagnostics.
@@ -84,7 +84,8 @@ async function readFrame(reader: ReadableStreamDefaultReader<Uint8Array>) {
   assert.equal(next.done, false);
   const text = new TextDecoder().decode(next.value);
   assert.ok(text.startsWith('data: ') && text.endsWith('\n\n'));
-  return JSON.parse(text.slice(6));
+  assert.match(text, /\nid: hv1-[a-f0-9]{64}\n\n$/);
+  return JSON.parse(text.split('\n')[0].slice(6));
 }
 const released = { active: 0, leases: 0, stops: 1, removed: 1 };
 

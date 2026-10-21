@@ -3,8 +3,9 @@ export function createHistoryClient({ onView, onState, platform = window }) {
   let target, current, suspended = false;
   const valid = (connection) => current === connection;
   const state = (connection, phase) => {
-    if (valid(connection)) onState({ phase, loaded: connection.loaded });
+    if (valid(connection)) onState({ phase, loaded: connection.loaded, ...connection.accepted });
   };
+  const validId = (id) => typeof id === 'string' && /^hv1-[a-f0-9]{64}$/.test(id);
   function release() {
     const old = current;
     current = undefined; // Invalidate callbacks before abort/close can dispatch more events.
@@ -20,9 +21,14 @@ export function createHistoryClient({ onView, onState, platform = window }) {
       }).catch(() => {});
     }
   }
-  function accept(connection, view) {
+  function accept(connection, view, id) {
     if (view.historyProtocol !== 2) connection.lease = undefined;
     onView(view);
+    // Native Last-Event-ID acknowledges transport receipt, not successful UI
+    // acceptance. Only this exact accepted view may authorize an unchanged event.
+    connection.loaded = true;
+    connection.accepted = view.historyProtocol === 2 && validId(id)
+      ? { id, activity: view.activity || '', busy: !!view.busy } : undefined;
   }
   function connect(next) {
     release();
@@ -40,11 +46,20 @@ export function createHistoryClient({ onView, onState, platform = window }) {
       let view;
       try { view = JSON.parse(event.data); } catch { return; }
       if (!view || !Array.isArray(view.messages)) return;
-      connection.loaded = true;
       connection.fallback?.abort();
-      accept(connection, view);
+      accept(connection, view, event.lastEventId);
       state(connection, 'live');
     };
+    source.addEventListener('unchanged', (event) => {
+      if (!valid(connection)) return;
+      if (!connection.loaded || !validId(event.lastEventId) || event.lastEventId !== connection.accepted?.id) {
+        // A new EventSource has no Last-Event-ID, so it receives a full snapshot.
+        connect(target);
+        return;
+      }
+      connection.fallback?.abort();
+      state(connection, 'unchanged');
+    });
     // Keep EventSource's native reconnect behavior; snapshot fallback runs only before a first view.
     source.onerror = async () => {
       if (!valid(connection)) return;
@@ -57,7 +72,6 @@ export function createHistoryClient({ onView, onState, platform = window }) {
         const view = await snapshot('/api/events?session=' + session + '&snapshot=1', abort);
         if (!valid(connection) || connection.loaded) return;
         if (!view || !Array.isArray(view.messages)) throw Error("History unavailable");
-        connection.loaded = true;
         accept(connection, view);
         state(connection, 'snapshot');
       } catch {

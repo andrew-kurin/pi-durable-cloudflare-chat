@@ -115,7 +115,7 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
   await page.addInitScript(() => {
     window.streams = [];
-    window.EventSource = class {
+    window.EventSource = class {addEventListener(){}
       constructor() {
         window.streams.push(this);
         queueMicrotask(() => this.onopen?.());

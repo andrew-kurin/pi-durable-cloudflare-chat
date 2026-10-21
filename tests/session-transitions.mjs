@@ -6,7 +6,7 @@ const browser=await chromium.launch({executablePath:process.env.CHROME_EXECUTABL
 let release,entered;const submissions=[],errors=[];
 try{
  const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});page.setDefaultTimeout(5000);page.on('pageerror',e=>errors.push(e.message));
- await page.addInitScript(()=>{localStorage.setItem('pi:last-chat:v1','2');window.streams=[];window.EventSource=class{constructor(url){this.url=url;window.streams.push(this);queueMicrotask(()=>this.onopen?.())}close(){this.closed=true}};});
+ await page.addInitScript(()=>{localStorage.setItem('pi:last-chat:v1','2');window.streams=[];window.EventSource=class{addEventListener(){}constructor(url){this.url=url;window.streams.push(this);queueMicrotask(()=>this.onopen?.())}close(){this.closed=true}};});
  await page.route('**/*',async route=>{
   const u=new URL(route.request().url());assert.equal(u.origin,'https://chat.example.test','No external requests');
   if(u.pathname==='/api/sessions')return route.fulfill({json:[{id:'1',title:'First'},{id:'2',title:'Second'}]});

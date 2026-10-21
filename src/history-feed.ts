@@ -32,6 +32,13 @@ export class HistoryFeed {
         ),
     };
   }
+  private async contentId(sid: string, json: string) {
+    // This is a validator for the complete public view, never a journal cursor
+    // or an authorization token. A schema change must change this namespace.
+    const bytes = new TextEncoder().encode(`history-view-v1\n${sid}\n${json}`);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return 'hv1-' + Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+  }
   async close(id: string) {
     this.closedStreams.set(id, Date.now() + 55000);
     while (this.closedStreams.size > 64)
@@ -130,7 +137,7 @@ export class HistoryFeed {
     let sourceStopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
-    let flush = () => {};
+    let flush: () => void | Promise<void> = () => {};
     const lifetime = new AbortController();
     const stopped = Symbol('History lease ended');
     let cancelSetup!: (value: typeof stopped) => void;
@@ -200,36 +207,64 @@ export class HistoryFeed {
       let projection: ChatProjection | undefined = new ChatProjection();
       projection.apply(await setup(() => fullHistorySnapshot(this.harness,sid,source.snapshot,lifetime.signal)));
       const title = await setup(() => this.chatCatalog.title(sid, undefined, lifetime.signal));
+      const initial = JSON.stringify(this.frame(projection, title));
+      const initialId = await setup(() => this.contentId(sid, initial));
       if (ended) return endedResponse();
       const encoder = new TextEncoder();
+      const lastId = request.headers.get('Last-Event-ID');
+      const unchanged = lastId === initialId;
+      const initialFrame = encoder.encode(unchanged
+        ? `event: unchanged\ndata: {}\nid: ${initialId}\n\n`
+        : `data: ${initial}\nid: ${initialId}\n\n`);
       // Keep one encoded frame in the readable queue. Further batches update
       // only the projection and this flag, without copying/encoding history.
-      let dirty = true;
+      // A single pump also owns asynchronous hashing; no pending frame backlog.
+      let dirty = false, revision = 0;
+      let pumping: Promise<void> | undefined;
       flush = () => {
-        if (!controller || !projection) return;
-        if (dirty && controller.desiredSize! > 0) {
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify(this.frame(projection, title))}\n\n`),
-          );
-          dirty = false;
-        }
-        // Release the lease/source immediately on stop, but let a reader drain
-        // the initial frame and latest state even after close or lease expiry.
-        if (ended && !dirty) {
-          controller.close();
+        if (pumping) return pumping;
+        pumping = (async () => {
+          while (controller && projection && dirty && controller.desiredSize! > 0) {
+            const currentRevision = revision;
+            dirty = false;
+            const json = JSON.stringify(this.frame(projection, title));
+            const contentId = await this.contentId(sid, json);
+            if (!controller || !projection) return; // Cancelled during hashing.
+            if (currentRevision !== revision) { dirty = true; continue; }
+            controller.enqueue(encoder.encode(`data: ${json}\nid: ${contentId}\n\n`));
+          }
+          // Release the lease/source immediately on stop, but let a reader drain
+          // the initial frame and latest state even after close or lease expiry.
+          if (controller && ended && !dirty) {
+            controller.close();
+            controller = undefined;
+            projection = undefined;
+          }
+        })().catch(error => {
+          logTechnicalError('request', error, crypto.randomUUID());
+          controller?.error(error);
           controller = undefined;
           projection = undefined;
-        }
+          dirty = false;
+          void stop();
+        }).finally(() => {
+          pumping = undefined;
+          // A batch/stop can arrive after the pump's last check but before this
+          // continuation. Do not strand a waiting reader or terminal state.
+          if (controller && ((dirty && controller.desiredSize! > 0) || (ended && !dirty))) return flush();
+        });
+        return pumping;
       };
       const body = new ReadableStream<Uint8Array>({
         start: (c) => {
           controller = c;
-          flush();
+          controller.enqueue(initialFrame);
           void source.closed?.then(async end => {
             if (ended) return;
             if (end.reason === 'session_failed') {
               projection!.sessionFailed();
               dirty = true;
+              revision++;
             }
             await stop();
           }).catch(error => {
@@ -246,8 +281,9 @@ export class HistoryFeed {
                 if (ended) return;
                 projection!.apply(next);
                 dirty = true;
+                revision++;
               }
-              flush();
+              await flush();
             } catch (error) {
               if (!ended) throw error;
             }

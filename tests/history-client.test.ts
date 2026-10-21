@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import { createHistoryClient } from '../public/history-client.js';
 const view = (text: string) => ({ historyProtocol: 2, messages: [{ role: 'user', text }], busy: false });
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
-function fixture(fetchSnapshot: (url: string, options: any) => Promise<any> = async () => Response.json(view('snapshot')), beacon = false) {
+function fixture(fetchSnapshot: (url: string, options: any) => Promise<any> = async () => Response.json(view('snapshot')), beacon = false, render?: (v: any) => void) {
   const sources: any[] = [], views: any[] = [], states: any[] = [], closes: any[] = [], requests: any[] = [];
   const lifecycle = new EventTarget();
   const platform = {
     crypto,
     EventSource: class {
+      listeners = new Map<string, (event: any) => void>();
+      addEventListener(type: string, listener: (event: any) => void) { this.listeners.set(type, listener); }
       closed = 0;
       constructor(public url: string) { sources.push(this); }
       close() { this.closed++; }
@@ -23,10 +25,11 @@ function fixture(fetchSnapshot: (url: string, options: any) => Promise<any> = as
     clearTimeout: (timer: any) => clearTimeout(timer),
     addEventListener: lifecycle.addEventListener.bind(lifecycle),
   };
-  const client = createHistoryClient({ platform, onView: (v: any) => views.push(v), onState: (s: any) => states.push(s) });
-  const emit = (source: any, value: any) => source.onmessage({ data: JSON.stringify(value) });
+  const client = createHistoryClient({ platform, onView: (v: any) => { render?.(v); views.push(v); }, onState: (s: any) => states.push(s) });
+  const emit = (source: any, value: any, lastEventId?: string) => source.onmessage({ data: JSON.stringify(value), lastEventId });
+  const unchanged = (source: any, lastEventId: string) => source.listeners.get('unchanged')({ data: '{}', lastEventId });
   const page = (type: string, persisted = true) => lifecycle.dispatchEvent(Object.assign(new Event(type), { persisted }));
-  return { client, sources, views, states, closes, requests, emit, page };
+  return { client, sources, views, states, closes, requests, emit, unchanged, page };
 }
 test('rapid switching suppresses stale open/message/error callbacks and targets fallback to the new chat', async () => {
   const f = fixture();
@@ -162,6 +165,62 @@ test('a response arriving after a cancelled fetch has its unread body cancelled'
   assert.equal(cancelled, 1);
   assert.equal(f.views.length, 0);
 });
+
+const contentId = 'hv1-' + 'a'.repeat(64);
+test('a failed UI acceptance cannot authorize an unchanged marker for that transport receipt', () => {
+  let fail = false;
+  const f = fixture(undefined, false, () => { if (fail) throw Error('Synthetic render failure'); });
+  f.client.connect({ sessionId: '1' });
+  const source = f.sources[0];
+  f.emit(source, view('accepted'), contentId);
+  fail = true;
+  const nextId = 'hv1-' + 'b'.repeat(64);
+  assert.throws(() => f.emit(source, view('rejected'), nextId), /Synthetic render failure/);
+  f.unchanged(source, nextId);
+  assert.equal(f.sources.length, 2);
+  assert.equal(f.views.length, 1);
+  assert.equal(f.states.at(-1).loaded, false);
+  f.client.close();
+});
+test('unchanged renewals retain the accepted view without rendering and restore its activity state', async () => {
+  const f = fixture();
+  f.client.connect({ sessionId: '1' });
+  const source = f.sources[0];
+  f.emit(source, { ...view('saved'), activity: 'Working', busy: true }, contentId);
+  await source.onerror(); source.onopen();
+  f.unchanged(source, contentId);
+  f.unchanged(source, contentId);
+  assert.equal(f.views.length, 1);
+  assert.equal(f.sources.length, 1);
+  assert.equal(f.requests.length, 0);
+  assert.deepEqual(f.states.at(-1), { phase: 'unchanged', loaded: true, id: contentId, activity: 'Working', busy: true });
+  f.client.close();
+});
+
+for (const mode of ['empty', 'snapshot', 'mismatched', 'malformed', 'rejected-frame', 'chat-switch', 'reload'] as const) {
+  test(`unchanged without a matching accepted view resynchronizes after ${mode}`, async () => {
+    const f = fixture();
+    f.client.connect({ sessionId: '1' });
+    let source = f.sources[0];
+    if (mode === 'snapshot') await source.onerror();
+    else if (mode !== 'empty') f.emit(source, view('saved'), contentId);
+    if (mode === 'chat-switch') { f.client.connect({ sessionId: '2' }); source = f.sources.at(-1); }
+    if (mode === 'reload') { f.page('pagehide'); f.page('pageshow'); source = f.sources.at(-1); }
+    if (mode === 'rejected-frame') source.onmessage({ data: '{', lastEventId: 'hv1-' + 'b'.repeat(64) });
+    const count = f.sources.length, views = f.views.length;
+    f.unchanged(source, mode === 'malformed' ? 'invalid' : ['mismatched', 'rejected-frame'].includes(mode) ? 'hv1-' + 'b'.repeat(64) : contentId);
+    assert.equal(f.sources.length, count + 1);
+    assert.equal(source.closed, 1);
+    assert.equal(f.views.length, views);
+    assert.equal(f.states.at(-1).phase, 'loading');
+    assert.equal(f.states.at(-1).loaded, false);
+    assert.match(f.sources.at(-1).url, new RegExp('session=' + (mode === 'chat-switch' ? '2' : '1')));
+    const stateCount = f.states.length;
+    f.unchanged(source, contentId);
+    assert.equal(f.states.length, stateCount, 'late unchanged from old source is ignored');
+    f.client.close();
+  });
+}
 for (const status of [200, 403]) test('rejected response bodies are cancelled (HTTP ' + status + ')', async () => {
   let cancelled = 0;
   const f = fixture(async () => new Response(new ReadableStream({ cancel() { cancelled++; } }), {

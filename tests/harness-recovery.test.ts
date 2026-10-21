@@ -41,7 +41,7 @@ test('a session_failed watch emits a safe final history frame and releases its S
  const feed=new HistoryFeed({session:()=>({events:async()=>({snapshot,start:()=>{},stop:async()=>{stops++;return {reason:'stopped'};},closed})}),conversation:async()=>({entries:async()=>({items:[]})})} as any,{title:async()=>undefined});
  const response=await feed.subscribe(new Request('https://offline.test/api/events?stream=aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'),'1');
  const reader=response.body!.getReader();await reader.read();end({reason:'session_failed',error:Error('SECRET_STORAGE_CAUSE')});
- const text=new TextDecoder().decode((await reader.read()).value),view=JSON.parse(text.slice(6));
+ const text=new TextDecoder().decode((await reader.read()).value),view=JSON.parse(text.split('\n')[0].slice(6));
  assert.equal(view.failureState.kind,'session');assert.equal(view.busy,false);assert.match(view.activity,/Reload saved history/);assert.doesNotMatch(text,/SECRET_STORAGE_CAUSE/);
  assert.equal((await reader.read()).done,true);assert.equal(stops,1);
  assert.equal((feed as any).activeStreams,0);assert.equal((feed as any).streamStops.size,0);

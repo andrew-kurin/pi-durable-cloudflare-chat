@@ -12,7 +12,7 @@ const browser=await chromium.launch({executablePath:process.env.CHROME_EXECUTABL
 await mkdir('.runtime/ui-cleanup/legacy-qa',{recursive:true});
 try{
  const page=await browser.newPage({viewport:{width:390,height:844},deviceScaleFactor:1,isMobile:true,hasTouch:true});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(5000);const assets=[];let sessions=[{id:'1',title:'Research durable conversations'}],posts=0,aborts=0,baseline=false,workspaceFeature=false,workspaceId,workspaceState;
- await page.addInitScript(()=>{window.syntheticStreams=[];window.EventSource=class{constructor(){window.syntheticStreams.push(this);queueMicrotask(()=>this.onopen?.());}close(){}};});
+ await page.addInitScript(()=>{window.syntheticStreams=[];window.EventSource=class{addEventListener(){}constructor(){window.syntheticStreams.push(this);queueMicrotask(()=>this.onopen?.());}close(){}};});
  await page.route('**/*',async route=>{
   const u=new URL(route.request().url());assert.equal(u.origin,'https://chat.example.test','No external fixture requests');
   if(u.pathname==='/api/status')return route.fulfill({json:{connected:true,modelEnabled:true,webSearchEnabled:true,canLogin:false,workspaceEnabled:workspaceFeature,workspaceRepository:workspaceFeature?'owner/project':undefined}});

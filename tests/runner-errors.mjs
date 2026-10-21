@@ -14,7 +14,7 @@ const browser = await chromium.launch({ executablePath: process.env.CHROME_EXECU
 const errors = [], requests = [];
 try {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } }); page.setDefaultTimeout(5000); page.on('pageerror', error => errors.push(error.message));
-  await page.addInitScript(() => { window.offlineStreams = []; window.EventSource = class { constructor() { window.offlineStreams.push(this); queueMicrotask(() => this.onopen?.()); } close() {} }; });
+  await page.addInitScript(() => { window.offlineStreams = []; window.EventSource = class {addEventListener(){} constructor() { window.offlineStreams.push(this); queueMicrotask(() => this.onopen?.()); } close() {} }; });
   await page.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()); assert.equal(url.origin, 'https://chat.example.test'); requests.push([request.method(), url.pathname]);
     if (url.pathname === '/api/events/close') return route.fulfill({ json: { closed: true } });
