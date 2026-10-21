@@ -525,7 +525,7 @@ export class Assistant extends DurableObject<Env> {
       }
       if (path === "/api/events" && request.method === "GET")
         return url.searchParams.get("snapshot") === "1"
-          ? await this.history.snapshot(sid, url)
+          ? await this.history.snapshot(request, sid)
           : await this.history.subscribe(request, sid);
       return Response.json({ error: "Not found" }, { status: 404 });
     } catch (error) {
