@@ -30,7 +30,7 @@ export async function startLiveServer(configPath: string) {
     try { await readProtected(journalPath, 2000000); } catch (e: any) { if (e.code !== 'ENOENT') throw e; }
     journal = await fileRoundJournal(journalPath);
     let version:string|undefined;try{const sha=execFileSync('git',['-C',checkout,'rev-parse','HEAD'],{encoding:'utf8',timeout:2000}).trim();if(/^[a-f0-9]{40}$/.test(sha))version=sha;}catch{}
-    const server = createRunnerServer(createSiwcRunner({ key, journal, version, credentials: owner, fetch: globalThis.fetch, diagnostic: record=>console.info(JSON.stringify(record)) }));
+    const server = createRunnerServer(createSiwcRunner({ key, journal, version, credentials: owner, fetch: globalThis.fetch, diagnostic: record=>console.info(JSON.stringify(record)) }), { signed: true });
     server.headersTimeout = 10000; server.requestTimeout = 15000;
     await new Promise<void>((ok, fail) => { server.once('error', fail); server.listen(c.port, '127.0.0.1', () => { server.off('error', fail); ok(); }); });
     console.info(JSON.stringify({event:'pi_runner_service',phase:'started',runnerVersion:version,maxRequestBytes:MAX_REQUEST_BYTES}));

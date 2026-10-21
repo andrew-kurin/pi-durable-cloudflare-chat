@@ -1,6 +1,7 @@
 import {technicalError} from '../../src/error-log';
-import { MAX_REQUEST_BYTES, type RoundJournal } from './core';
-import { RUNNER_PATH, sha256, siwcPayload, verifyRound } from '../../src/model-runner-protocol';
+import { type RoundJournal } from './core';
+import { RUNNER_PATH, sha256, siwcPayload, validRoundEnvelope, verifyRound } from '../../src/model-runner-protocol';
+import { BodyReadError, bodyLength, readRunnerBody, RequestAdmission, type RequestAdmissionLimits } from './admission';
 import { validatedStream } from './live-stream';
 import { diagnosticText, emitDiagnostic, providerError, type Diagnostic } from './diagnostics';
 import { providerFailureInfo, type ProviderFailureInfo } from '../../src/model-runner-error';
@@ -15,6 +16,7 @@ export interface LiveRunnerOptions {
   now?: () => number;
   diagnostic?: Diagnostic;
   version?: string;
+  admission?: Partial<RequestAdmissionLimits>;
 }
 const failure = (status: number, code: string, provider?: ProviderFailureInfo) => Response.json({ error: { code, message: code, ...(provider ? { provider } : {}) } }, { status, headers: { 'cache-control': 'no-store' } });
 export async function interrupted<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -27,26 +29,29 @@ export async function interrupted<T>(pending: Promise<T>, signal: AbortSignal): 
 }
 /** Real backend, never installed by the fake entrypoint or production Worker. */
 export function createSiwcRunner(options: LiveRunnerOptions) {
+ const admission = new RequestAdmission(options.admission);
  return async (request: Request): Promise<Response> => {
   const url = new URL(request.url);
   if (request.method !== 'POST' || url.pathname !== RUNNER_PATH || url.search) return failure(404, 'not_found');
-  const controller = new AbortController(), abort = () => controller.abort();
-  request.signal.addEventListener('abort', abort, { once: true }); if (request.signal.aborted) abort();
+  const controller = new AbortController(), abort = () => controller.abort(), requestSignal = request.signal;
+  requestSignal.addEventListener('abort', abort, { once: true }); if (requestSignal.aborted) abort();
   const reportedRound=request.headers.get('x-pi-round-id')??'';
   let roundId: string | undefined=/^[a-zA-Z0-9_-]{8,80}$/.test(reportedRound)?reportedRound:undefined, stage='request';const started=Date.now();let bodyBytes=0;
   const workerVersion=request.headers.get('x-pi-worker-version')??undefined;
   const kind=request.headers.get('x-pi-task-kind')==='compaction'?'compaction':'generation';
   const log=(record:Record<string,unknown>)=>emitDiagnostic(options.diagnostic,{event:'pi_runner',roundId,stage,kind,runnerVersion:options.version,workerVersion:workerVersion&&/^[a-f0-9-]{36}$/.test(workerVersion)?workerVersion:undefined,bodyBytes,durationMs:Date.now()-started,...record});
   const timer = setTimeout(abort, options.timeoutMs ?? 120000);
-  const finish = () => { clearTimeout(timer); request.signal.removeEventListener('abort', abort); };
+  const finish = () => { clearTimeout(timer); requestSignal.removeEventListener('abort', abort); };
+  let release: (() => void) | undefined;
   try {
-    const reader = request.body?.getReader(); if (!reader) throw new RunnerFailure('invalid_body');
-    const chunks: Uint8Array[] = []; let bytes = 0;
-    try { while (true) { const p = await interrupted(reader.read(), controller.signal); if (p.done) break; bytes += p.value.length; bodyBytes=bytes; if (bytes > MAX_REQUEST_BYTES) throw new RunnerFailure('invalid_body'); chunks.push(p.value); } }
-    finally { void reader.cancel().catch(() => {}); }
-    bodyBytes=bytes;
-    const all = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { all.set(chunk, offset); offset += chunk.length; }
-    const raw = new TextDecoder('utf-8', { fatal: true }).decode(all);
+    if (!validRoundEnvelope(request, options.now?.())) { log({outcome:'rejected',httpStatus:403,code:'transport_auth_failed'});finish();void request.body?.cancel().catch(()=>{});return failure(403, 'transport_auth_failed'); }
+    let length: number | undefined;
+    try { length = bodyLength(request.headers); } catch { void request.body?.cancel().catch(()=>{});throw new RunnerFailure('invalid_body'); }
+    release = admission.reserve(length);
+    if (!release) { log({outcome:'rejected',httpStatus:503,code:'runner_admission_limit'});finish();void request.body?.cancel().catch(()=>{});return failure(503, 'runner_admission_limit'); }
+    let raw: string;
+    try { raw = await readRunnerBody(request, controller.signal, admission.limits.readTimeoutMs, length, bytes => { bodyBytes = bytes; }); }
+    catch (error) { throw error instanceof BodyReadError ? new RunnerFailure(error.message) : error; }
     if (!await verifyRound(options.key, request, raw, options.now?.())) { log({outcome:'rejected',httpStatus:403,code:'transport_auth_failed'});finish(); return failure(403, 'transport_auth_failed'); }
     let payload: Record<string, unknown>;
     try { const input = JSON.parse(raw); if (input.store !== false || input.stream !== true) throw Error(); payload = siwcPayload(input); }
@@ -87,6 +92,6 @@ export function createSiwcRunner(options: LiveRunnerOptions) {
     log({outcome:'failure',code:error instanceof RunnerFailure?error.code:'siwc_round_interrupted',message:diagnosticText(error instanceof Error?error.message:undefined),error:technicalError(error),aborted:controller.signal.aborted});
     abort(); finish();
     return failure(502, error instanceof RunnerFailure ? error.code : 'siwc_round_interrupted');
-  }
+  } finally { release?.(); }
  };
 }
