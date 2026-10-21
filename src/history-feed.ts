@@ -9,6 +9,7 @@ import { logTechnicalError } from './error-log';
  */
 export class HistoryFeed {
   private activeStreams = 0;
+  private activeSnapshots = 0;
   private streamStops = new Map<string, () => Promise<void>>();
   private closedStreams = new Map<string, number>();
   constructor(
@@ -38,17 +39,76 @@ export class HistoryFeed {
     await this.streamStops.get(id)?.();
     return Response.json({ closed: true });
   }
-  async snapshot(sid: string, url: URL) {
-    const events = await this.harness.session(sid).events();
+  async snapshot(request: Request, sid: string) {
+    const unavailable = (status: number, error: string) => Response.json(
+      { error }, { status, headers: { 'Cache-Control': 'no-store' } },
+    );
+    if (request.signal.aborted)
+      return unavailable(408, 'History request cancelled.');
+    // One-shot reads have their own budget: a fallback must still work while
+    // the browser's three SSE leases are open, without allowing unlimited scans.
+    if (this.activeSnapshots >= 3)
+      return unavailable(429, 'Too many history requests. Retry loading history.');
+    this.activeSnapshots++;
+    let events:
+      | Awaited<ReturnType<ReturnType<typeof this.harness.session>["events"]>>
+      | undefined;
+    let ended = false, expired = false, sourceStopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const lifetime = new AbortController();
+    const stopped = Symbol('History snapshot lease ended');
+    let cancelSetup!: (value: typeof stopped) => void;
+    const cancelled = new Promise<typeof stopped>(resolve => { cancelSetup = resolve; });
+    const stopSource = async () => {
+      if (!events || sourceStopped) return;
+      sourceStopped = true;
+      try { await events.stop(); }
+      catch (error) { logTechnicalError('request', error, crypto.randomUUID()); }
+    };
+    const stop = () => {
+      if (ended) return;
+      ended = true;
+      clearTimeout(timer);
+      this.activeSnapshots--;
+      request.signal.removeEventListener('abort', onAbort);
+      lifetime.abort();
+      cancelSetup(stopped);
+      // A stalled stop must not hold the HTTP response or its admission slot.
+      // The source may also arrive after cancellation; that path owns it below.
+      void stopSource();
+    };
+    const onAbort = () => stop();
+    const setup = async <T>(read: () => Promise<T>): Promise<T> => {
+      if (ended) throw stopped;
+      const value = await Promise.race([read(), cancelled]);
+      if (ended || value === stopped) throw stopped;
+      return value as T;
+    };
     try {
+      request.signal.addEventListener('abort', onAbort, { once: true });
+      // One deadline covers acquisition, every history page, title and cleanup.
+      timer = setTimeout(() => { if (!ended) { expired = true; stop(); } }, 55000);
+      if (request.signal.aborted) stop();
+      const source = await setup(async () => {
+        events = await this.harness.session(sid).events();
+        if (ended) void stopSource();
+        return events;
+      });
       const projection = new ChatProjection();
-      projection.apply(await fullHistorySnapshot(this.harness,sid,events.snapshot));
-      const title = await this.chatCatalog.title(sid);
-      return Response.json(this.frame(projection, title), {
+      projection.apply(await setup(() => fullHistorySnapshot(this.harness, sid, source.snapshot, lifetime.signal)));
+      const title = await setup(() => this.chatCatalog.title(sid, undefined, lifetime.signal));
+      const response = Response.json(this.frame(projection, title), {
         headers: { "Cache-Control": "no-store" },
       });
+      await setup(stopSource);
+      return response;
+    } catch (error) {
+      if (ended) return unavailable(expired ? 504 : 408, expired
+        ? 'History request timed out. Retry loading history.'
+        : 'History request cancelled.');
+      throw error;
     } finally {
-      await events.stop();
+      stop();
     }
   }
   async subscribe(request: Request, sid: string) {
