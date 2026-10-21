@@ -46,12 +46,14 @@ export class ChatCatalog {
     if (!row) throw new RequestError(404, "Conversation not found");
     return row;
   }
-  async title(id: string, fallback?: string) {
-    return (
-      (await this.store.get<string>("chat-title:" + id)) ??
-      (await this.store.get<string>("chat-auto-title:" + id)) ??
-      conversationTitle(fallback)
-    );
+  async title(id: string, fallback?: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    const title = await this.store.get<string>("chat-title:" + id);
+    signal?.throwIfAborted();
+    if (title != null) return title;
+    const automatic = await this.store.get<string>("chat-auto-title:" + id);
+    signal?.throwIfAborted();
+    return automatic ?? conversationTitle(fallback);
   }
   async list(deleted = false) {
     const rows = await Promise.all(
