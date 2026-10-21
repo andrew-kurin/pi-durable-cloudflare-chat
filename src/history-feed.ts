@@ -60,25 +60,43 @@ export class HistoryFeed {
       if (deadline <= Date.now()) this.closedStreams.delete(key);
     if (id && this.closedStreams.has(id))
       return new Response(null, { status: 204 });
-    while (id && this.streamStops.has(id)) await this.streamStops.get(id)!();
-    if (id && this.closedStreams.has(id))
-      return new Response(null, { status: 204 });
-    if (this.activeStreams >= 3)
-      return Response.json(
-        {
-          error:
-            "Too many open chats. Close another chat and retry loading history.",
-        },
-        { status: 429 },
-      );
-    this.activeStreams++;
     let events:
       | Awaited<ReturnType<ReturnType<typeof this.harness.session>["events"]>>
       | undefined;
     let ended = false;
+    let expired = false;
+    let reserved = false;
+    let streaming = false;
+    let sourceStopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
     let flush = () => {};
+    const lifetime = new AbortController();
+    const stopped = Symbol('History lease ended');
+    let cancelSetup!: (value: typeof stopped) => void;
+    const cancelled = new Promise<typeof stopped>(resolve => { cancelSetup = resolve; });
+    // 204 permanently stops EventSource reconnect. Lease expiry is temporary:
+    // end an empty SSE response so the existing client can reconnect normally.
+    const endedResponse = () => expired
+      ? new Response(null, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' } })
+      : new Response(null, { status: 204 });
+    // Cancellation settles the caller even when an SDK/storage operation does
+    // not honor abort. Promise.race also observes any late rejection.
+    const setup = async <T>(read: () => Promise<T>): Promise<T> => {
+      if (ended) throw stopped;
+      const value = await Promise.race([read(), cancelled]);
+      if (ended || value === stopped) throw stopped;
+      return value as T;
+    };
+    const stopSource = async () => {
+      if (!events || sourceStopped) return;
+      sourceStopped = true;
+      try {
+        await events.stop();
+      } catch (error) {
+        logTechnicalError('request', error, crypto.randomUUID());
+      }
+    };
     const onAbort = () => {
       void stop();
     };
@@ -86,29 +104,44 @@ export class HistoryFeed {
       if (ended) return;
       ended = true;
       clearTimeout(timer);
-      this.activeStreams--;
+      if (reserved) {
+        reserved = false;
+        this.activeStreams--;
+      }
       if (id && this.streamStops.get(id) === stop) this.streamStops.delete(id);
       request.signal.removeEventListener("abort", onAbort);
+      lifetime.abort();
+      cancelSetup(stopped);
       flush();
-      try {
-        await events?.stop();
-      } catch (error) {
-        logTechnicalError("request", error, crypto.randomUUID());
-      }
+      await stopSource();
     };
-    if (id) this.streamStops.set(id, stop);
     try {
-      events = await this.harness.session(sid).events();
-      if (ended) {
-        await events.stop();
+      // One deadline covers replacement, all initial setup and live streaming.
+      request.signal.addEventListener('abort', onAbort, { once: true });
+      timer = setTimeout(() => { if (!ended) { expired = true; void stop(); } }, 55000);
+      if (request.signal.aborted) void stop();
+      if (ended) return endedResponse();
+      while (id && this.streamStops.has(id))
+        await setup(() => this.streamStops.get(id)!());
+      if (id && this.closedStreams.has(id))
         return new Response(null, { status: 204 });
-      }
+      if (this.activeStreams >= 3)
+        return Response.json({ error: 'Too many open chats. Close another chat and retry loading history.' }, { status: 429 });
+      this.activeStreams++;
+      reserved = true;
+      if (id) this.streamStops.set(id, stop);
+      const source = await setup(async () => {
+        events = await this.harness.session(sid).events();
+        // The setup race may already have returned 204. Own and dispose the
+        // late source without reserving a slot again or awaiting it in the HTTP path.
+        if (ended) void stopSource();
+        return events;
+      });
       let projection: ChatProjection | undefined = new ChatProjection();
-      projection.apply(await fullHistorySnapshot(this.harness,sid,events.snapshot));
-      const title = await this.chatCatalog.title(sid);
-      if (ended) return new Response(null, { status: 204 });
+      projection.apply(await setup(() => fullHistorySnapshot(this.harness,sid,source.snapshot,lifetime.signal)));
+      const title = await setup(() => this.chatCatalog.title(sid, undefined, lifetime.signal));
+      if (ended) return endedResponse();
       const encoder = new TextEncoder();
-      const source = events;
       // Keep one encoded frame in the readable queue. Further batches update
       // only the projection and this flag, without copying/encoding history.
       let dirty = true;
@@ -132,11 +165,6 @@ export class HistoryFeed {
         start: (c) => {
           controller = c;
           flush();
-          timer = setTimeout(() => {
-            void stop();
-          }, 55000);
-          request.signal.addEventListener("abort", onAbort, { once: true });
-          if (request.signal.aborted) void stop();
           void source.closed?.then(async end => {
             if (ended) return;
             if (end.reason === 'session_failed') {
@@ -149,16 +177,20 @@ export class HistoryFeed {
             void stop();
           });
           if (!ended) source.start(async (batch) => {
-            for (const event of batch) {
-              if (ended) return;
-              const next = event.type === 'snapshot'
-                ? await fullHistorySnapshot(this.harness, sid, event)
-                : event;
-              if (ended) return;
-              projection!.apply(next);
-              dirty = true;
+            try {
+              for (const event of batch) {
+                if (ended) return;
+                const next = event.type === 'snapshot'
+                  ? await fullHistorySnapshot(this.harness, sid, event, lifetime.signal)
+                  : event;
+                if (ended) return;
+                projection!.apply(next);
+                dirty = true;
+              }
+              flush();
+            } catch (error) {
+              if (!ended) throw error;
             }
-            flush();
           });
         },
         pull: () => flush(),
@@ -169,15 +201,21 @@ export class HistoryFeed {
           return stop();
         },
       }, { highWaterMark: 1 });
-      return new Response(body, {
+      const response = new Response(body, {
         headers: {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-store",
         },
       });
+      streaming = true;
+      return response;
     } catch (error) {
-      await stop();
+      if (ended) return endedResponse();
       throw error;
+    } finally {
+      // Do not hold an aborted setup response open for uncooperative cleanup.
+      // stopSource observes errors and runs once even if the source arrives late.
+      if (!streaming) void stop();
     }
   }
 }
