@@ -1,4 +1,4 @@
-import {RequestError,jsonObject} from './http-input';
+import {RequestError,jsonObject,readBodyText} from './http-input';
 
 const KEY='maintenance:v1',MAX_ITEMS=100;
 export interface MaintenanceEnv {
@@ -72,7 +72,7 @@ export class Maintenance {
  async handle(request:Request,callbacks:{validate:()=>Promise<void>;stop?:(sessions:string[])=>Promise<void>}){
   if(request.method==='GET')return Response.json(await this.report());
   if(request.method!=='POST')return new Response('Method not allowed',{status:405});
-  const reader=request.body?.getReader();let raw='',bytes=0;const decoder=new TextDecoder();try{if(reader)while(true){const p=await reader.read();if(p.done)break;bytes+=p.value.byteLength;if(bytes>2000){await reader.cancel();throw new RequestError(413,'Maintenance request too large');}raw+=decoder.decode(p.value,{stream:true});}raw+=decoder.decode();}finally{reader?.releaseLock();}const b=jsonObject(raw);
+  const raw=await readBodyText(request,2000,{maxBytes:2000,message:'Maintenance request too large'});const b=jsonObject(raw);
   if(b.action==='pause'&&typeof b.operationId==='string')return Response.json(await this.pause(b.operationId));
   if(b.action==='checkpoint'&&typeof b.epoch==='string')return Response.json(await this.checkpoint(b.epoch));
   if(b.action==='resume'&&typeof b.epoch==='string'&&typeof b.checkpointId==='string'&&typeof b.workerVersion==='string')return Response.json(await this.resume(b.epoch,b.checkpointId,b.workerVersion,callbacks.validate));

@@ -1,5 +1,6 @@
 // Isolated staging entrypoint. No chat, provider, credential store or production namespace.
 import {authorize,secured,type AccessConfig} from './auth';
+import {readBodyText,RequestError} from './http-input';
 import {TaskWorkspace} from './workspace-container';
 import type {WorkspaceRequest,WorkspaceAction} from './workspace-tools';
 export {TaskWorkspace};
@@ -59,11 +60,11 @@ export default {async fetch(request:Request,env:SmokeEnv){
   if(request.method==='GET'&&path==='/api/smoke/logs')return secured(Response.json({stdout:await dispatch('stdout',{action:'logs',runId:await operationId('run'),stream:'stdout'}),stderr:await dispatch('stderr',{action:'logs',runId:await operationId('run'),stream:'stderr'})}));
   if(request.method==='GET'&&path==='/api/smoke/artifact')return secured(Response.json(await stub.artifact(),{headers:{'Content-Disposition':'attachment; filename="native-workspace-smoke.json"'}}));
   if(request.method!=='POST'||path!=='/api/smoke')return secured(new Response('Method not allowed',{status:405}));
-  const raw=await request.text();if(raw.length>100)return secured(Response.json({error:'Invalid smoke action'},{status:400}));
+  const raw=await readBodyText(request,100,{status:400,message:'Invalid smoke action'});
   let body;try{body=JSON.parse(raw)}catch{return secured(Response.json({error:'Invalid smoke action'},{status:400}))}
   if(!body||Array.isArray(body)||Object.keys(body).length!==1||typeof body.action!=='string')return secured(Response.json({error:'Invalid smoke action'},{status:400}));
   if(body.action==='open')return secured(Response.json(await stub.open(ID,SESSION,env.WORKSPACE_REPOSITORY)));
   if(!Object.hasOwn(steps,body.action))return secured(Response.json({error:'Unknown fixed smoke action'},{status:400}));
   return secured(Response.json(await dispatch(body.action,steps[body.action as keyof typeof steps])));
- }catch{return secured(Response.json({error:'Smoke operation unavailable; review state and cancel if needed'},{status:503}))}
+ }catch(error){return secured(Response.json({error:error instanceof RequestError?error.message:'Smoke operation unavailable; review state and cancel if needed'},{status:error instanceof RequestError?error.status:503}))}
 }};

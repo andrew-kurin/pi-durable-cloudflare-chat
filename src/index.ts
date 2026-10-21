@@ -5,7 +5,7 @@ import { ProviderSessions, createChatModels } from "./provider-sessions";
 import { HistoryFeed } from "./history-feed";
 import { WorkspaceCoordinator } from "./workspace-coordinator";
 import { ChatCatalog } from "./chat-catalog";
-import { RequestError, discardBody, jsonObject } from "./http-input";
+import { RequestError, discardBody, jsonObject, readBodyText } from "./http-input";
 import { SubmissionAdmission, type ArrivedSubmission } from "./submission-admission";
 import { logTechnicalError } from "./error-log";
 import { DurableObject } from "cloudflare:workers";
@@ -233,12 +233,7 @@ export class Assistant extends DurableObject<Env> {
           !["/api/grok/login", "/api/grok/check"].includes(path)
         )
           return Response.json({ error: "Not found" }, { status: 404 });
-        const raw = await request.text();
-        if (raw.length > 100)
-          return Response.json(
-            { error: "Invalid setup action" },
-            { status: 400 },
-          );
+        const raw = await readBodyText(request, 100, { status: 400, message: "Invalid setup action" });
         let body: unknown;
         try {
           body = jsonObject(raw);
@@ -326,12 +321,7 @@ export class Assistant extends DurableObject<Env> {
             { error: "Workspace disabled" },
             { status: 403 },
           );
-        const raw = await request.text();
-        if (raw.length > 1000)
-          return Response.json(
-            { error: "Invalid workspace request" },
-            { status: 400 },
-          );
+        const raw = await readBodyText(request, 1000, { status: 400, message: "Invalid workspace request" });
         const b = jsonObject(raw);
         if (
           typeof b.workspaceId !== "string" ||
@@ -368,12 +358,7 @@ export class Assistant extends DurableObject<Env> {
             },
           );
         if (operation === "extend" && request.method === "POST") {
-          const raw = await request.text();
-          if (raw.length > 1000)
-            return Response.json(
-              { error: "Invalid extension" },
-              { status: 400 },
-            );
+          const raw = await readBodyText(request, 1000, { status: 400, message: "Invalid extension" });
           const b = jsonObject(raw);
           if (
             (b.target !== "task" && b.target !== "command") ||
@@ -390,12 +375,7 @@ export class Assistant extends DurableObject<Env> {
         if (!operation && request.method === "GET")
           return Response.json(await this.workspaces.status(sid, id));
         if (!operation && request.method === "POST") {
-          const raw = await request.text();
-          if (raw.length > 1000)
-            return Response.json(
-              { error: "Invalid owner action" },
-              { status: 400 },
-            );
+          const raw = await readBodyText(request, 1000, { status: 400, message: "Invalid owner action" });
           const b = jsonObject(raw);
           if (
             (b.action !== "cancel" && b.action !== "export") ||
@@ -423,7 +403,7 @@ export class Assistant extends DurableObject<Env> {
             { error: "Search check is not enabled" },
             { status: 403 },
           );
-        const body = await request.text();
+        const body = await readBodyText(request, 100, { status: 400, message: "Invalid search check" });
         if (body !== '{"action":"run-approved-search-check"}')
           return Response.json(
             { error: "Invalid search check" },
@@ -446,12 +426,7 @@ export class Assistant extends DurableObject<Env> {
           await this.chatCatalog.list(url.searchParams.get("deleted") === "1"),
         );
       if (path === "/api/session-trash" && request.method === "POST") {
-        const raw = await request.text();
-        if (raw.length > 100)
-          return Response.json(
-            { error: "Invalid chat action" },
-            { status: 400 },
-          );
+        const raw = await readBodyText(request, 100, { status: 400, message: "Invalid chat action" });
         const body = jsonObject(raw);
         if (
           Object.keys(body).length !== 1 ||
@@ -468,9 +443,7 @@ export class Assistant extends DurableObject<Env> {
         );
       }
       if (path === "/api/session-title" && request.method === "POST") {
-        const raw = await request.text();
-        if (raw.length > 1000)
-          return Response.json({ error: "Title too long" }, { status: 400 });
+        const raw = await readBodyText(request, 1000, { status: 400, message: "Title too long" });
         const b = jsonObject(raw);
         if (
           typeof b.title !== "string" ||
@@ -493,9 +466,7 @@ export class Assistant extends DurableObject<Env> {
       }
       if (path === "/api/submit" && request.method === "POST") {
         await this.providers.assertCanSubmit(() => this.sessionModel(sid));
-        const raw = await request.text();
-        if (raw.length > 20000)
-          return Response.json({ error: "Message too long" }, { status: 413 });
+        const raw = await readBodyText(request, 20000, { status: 413, message: "Message too long" });
         const b = jsonObject(raw);
         if (
           typeof b.text !== "string" ||
