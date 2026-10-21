@@ -64,6 +64,7 @@ export class HistoryFeed {
       | Awaited<ReturnType<ReturnType<typeof this.harness.session>["events"]>>
       | undefined;
     let ended = false;
+    let expired = false;
     let reserved = false;
     let streaming = false;
     let sourceStopped = false;
@@ -74,6 +75,11 @@ export class HistoryFeed {
     const stopped = Symbol('History lease ended');
     let cancelSetup!: (value: typeof stopped) => void;
     const cancelled = new Promise<typeof stopped>(resolve => { cancelSetup = resolve; });
+    // 204 permanently stops EventSource reconnect. Lease expiry is temporary:
+    // end an empty SSE response so the existing client can reconnect normally.
+    const endedResponse = () => expired
+      ? new Response(null, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' } })
+      : new Response(null, { status: 204 });
     // Cancellation settles the caller even when an SDK/storage operation does
     // not honor abort. Promise.race also observes any late rejection.
     const setup = async <T>(read: () => Promise<T>): Promise<T> => {
@@ -112,9 +118,9 @@ export class HistoryFeed {
     try {
       // One deadline covers replacement, all initial setup and live streaming.
       request.signal.addEventListener('abort', onAbort, { once: true });
-      timer = setTimeout(() => { void stop(); }, 55000);
+      timer = setTimeout(() => { if (!ended) { expired = true; void stop(); } }, 55000);
       if (request.signal.aborted) void stop();
-      if (ended) return new Response(null, { status: 204 });
+      if (ended) return endedResponse();
       while (id && this.streamStops.has(id))
         await setup(() => this.streamStops.get(id)!());
       if (id && this.closedStreams.has(id))
@@ -134,7 +140,7 @@ export class HistoryFeed {
       let projection: ChatProjection | undefined = new ChatProjection();
       projection.apply(await setup(() => fullHistorySnapshot(this.harness,sid,source.snapshot,lifetime.signal)));
       const title = await setup(() => this.chatCatalog.title(sid, undefined, lifetime.signal));
-      if (ended) return new Response(null, { status: 204 });
+      if (ended) return endedResponse();
       const encoder = new TextEncoder();
       // Keep one encoded frame in the readable queue. Further batches update
       // only the projection and this flag, without copying/encoding history.
@@ -204,7 +210,7 @@ export class HistoryFeed {
       streaming = true;
       return response;
     } catch (error) {
-      if (ended) return new Response(null, { status: 204 });
+      if (ended) return endedResponse();
       throw error;
     } finally {
       // Do not hold an aborted setup response open for uncooperative cleanup.

@@ -75,7 +75,8 @@ for (const phase of phases) for (const ending of ['abort', 'timeout'] as const) 
     if (ending === 'abort') f.aborts.forEach(a => a.abort());
     else { t.mock.timers.tick(54999); assert.equal(f.capacity().active, 3); t.mock.timers.tick(1); }
     // The fixture gate remains blocked: HTTP/capacity must settle independently.
-    const responses = await Promise.all(pending); assert.ok(responses.every(r => r.status === 204));
+    const responses = await Promise.all(pending); assert.ok(responses.every(r => r.status === (ending === 'timeout' ? 200 : 204)));
+    if (ending === 'timeout') for (const r of responses) { assert.equal(r.headers.get('Content-Type'), 'text/event-stream'); assert.equal(await r.text(), ''); }
     assert.deepEqual(f.capacity(), { active: 0, leases: 0 });
     await probe(f.feed); assert.deepEqual(f.capacity(), { active: 0, leases: 0 });
     const before = f.reads(); f.release(); await tick(); assert.deepEqual(f.reads(), before, 'late setup cannot issue another page or title lookup');
@@ -161,7 +162,7 @@ for (const ending of ['abort', 'timeout'] as const) test(`replacement waiting fo
   const pending = f.feed.subscribe(new Request('https://chat.example.test/api/events?stream=' + f.ids[0], { signal: abort.signal }), '2');
   assert.deepEqual(f.capacity(), { active: 0, leases: 0 });
   if (ending === 'abort') abort.abort(); else t.mock.timers.tick(55000);
-  assert.equal((await pending).status, 204); assert.equal(f.sources[0].stops, 1);
+  assert.equal((await pending).status, ending === 'timeout' ? 200 : 204); assert.equal(f.sources[0].stops, 1);
   await probe(f.feed); f.releaseCleanup(); await tick(); await first.body!.cancel();
   assert.deepEqual(f.capacity(), { active: 0, leases: 0 }); assert.ok(f.sources.every(s => s.stops === 1));
 });
