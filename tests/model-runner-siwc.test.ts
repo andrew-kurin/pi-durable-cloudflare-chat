@@ -97,7 +97,8 @@ test('Worker-compatible manual redirect mode rejects every redirect without forw
 test('private diagnostics preserve provider status/code/message and IDs without credentials or request content',async()=>{
  const records:Record<string,unknown>[]=[];
  const f=fixture({diagnostic:r=>records.push(r),fetch:async()=>Response.json({error:{code:'invalid_request_error',type:'invalid_request_error',param:'input[2].call_id',message:'No tool call found for call_id call_exact; Authorization: Bearer sk-private-token-value',input:'PRIVATE-PROMPT'}},{status:400,headers:{'x-request-id':'req_exact'}})});
- const r=await f.runner(await request('diagnostic-round-1'));assert.equal(r.status,502);
+ const r=await f.runner(await request('diagnostic-round-1'));assert.equal(r.status,400);
+ assert.deepEqual(await r.json(),{error:{code:'siwc_provider_rejected',message:'siwc_provider_rejected',provider:{httpStatus:400,code:'invalid_request_error'}}});
  const response=records.find(r=>r.outcome==='response')!;assert.equal(response.httpStatus,400);assert.equal(response.requestId,'req_exact');assert.equal(response.roundId,'diagnostic-round-1');
  const failure=records.find(r=>r.outcome==='provider_error')!;assert.deepEqual(failure.error,{code:'invalid_request_error',type:'invalid_request_error',param:'input[2].call_id',message:'No tool call found for call_id call_exact; Authorization: [redacted]'});
  const text=JSON.stringify(records);assert.ok(!text.includes('sk-private-token-value'));assert.ok(!text.includes('PRIVATE-PROMPT'));assert.ok(!text.includes('SYNTHETIC-ACCESS'));assert.ok(!text.includes('fixture'));

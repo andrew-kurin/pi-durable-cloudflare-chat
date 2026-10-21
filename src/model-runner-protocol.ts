@@ -19,10 +19,17 @@ export async function signRound(key: CryptoKey, body: string, id: string, now = 
   const signature = [...new Uint8Array(await crypto.subtle.sign('HMAC', key, await canonical('POST', RUNNER_PATH, id, timestamp, body)))].map(x => x.toString(16).padStart(2, '0')).join('');
   return { 'content-type': 'application/json', 'x-pi-round-id': id, 'x-pi-timestamp': timestamp, 'x-pi-signature': signature };
 }
+/** Cheap envelope rejection only. The exact body must still pass verifyRound. */
+export function validRoundEnvelope(request: Pick<Request, 'url' | 'method' | 'headers'>, now = Date.now()) {
+  try {
+    const url = new URL(request.url), id = request.headers.get('x-pi-round-id') ?? '', timestamp = request.headers.get('x-pi-timestamp') ?? '', signature = request.headers.get('x-pi-signature') ?? '';
+    return request.method === 'POST' && url.pathname === RUNNER_PATH && !url.search && ROUND_ID.test(id) && /^\d{10,13}$/.test(timestamp) && /^[a-f0-9]{64}$/.test(signature) && Math.abs(now - Number(timestamp)) <= 30000;
+  } catch { return false; }
+}
 export async function verifyRound(key: CryptoKey, request: Request, body: string, now = Date.now()) {
   try {
     const url = new URL(request.url), id = request.headers.get('x-pi-round-id') ?? '', timestamp = request.headers.get('x-pi-timestamp') ?? '', signature = request.headers.get('x-pi-signature') ?? '';
-    if (url.search || !/^[a-f0-9]{64}$/.test(signature) || Math.abs(now - Number(timestamp)) > 30000) return false;
+    if (!validRoundEnvelope(request, now)) return false;
     const bytes = Uint8Array.from(signature.match(/../g)!, hex => parseInt(hex, 16));
     return await crypto.subtle.verify('HMAC', key, bytes, await canonical(request.method, url.pathname, id, timestamp, body));
   } catch { return false; }
@@ -31,7 +38,7 @@ export async function verifyRound(key: CryptoKey, request: Request, body: string
  * Unsupported tuning/state options are deliberately omitted. No tool execution. */
 export function siwcPayload(raw: unknown): Record<string, unknown> {
   const p = raw as Record<string, any>;
-  if (!p || !RUNNER_MODELS.includes(p.model) || !Array.isArray(p.input) || p.input.some((x: any) => !x || typeof x !== 'object' || x.role === 'system')) throw Error('Invalid SIWC input');
+  if (!p || !RUNNER_MODELS.includes(p.model) || !Array.isArray(p.input) || p.input.some((x: any) => !x || typeof x !== 'object' || x.role === 'system' || x.type === 'configuration_update')) throw Error('Invalid SIWC input');
   const validTool = (t: any): boolean => !!t && (t.type === 'function' || t.type === 'custom') && typeof t.name === 'string' && t.name.length > 0;
   if (p.tools !== undefined && (!Array.isArray(p.tools) || !p.tools.every(validTool))) throw Error('Unsupported SIWC tools');
   for (const item of p.input) if (item.type === 'additional_tools' && (!Array.isArray(item.tools) || !item.tools.every(validTool))) throw Error('Unsupported SIWC tools');
