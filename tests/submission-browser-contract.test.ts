@@ -17,7 +17,7 @@ async function browser(f:Awaited<ReturnType<typeof fixture>>) {
  w.createChatSession=(options:any)=>createChatSession({...options,platform:w});
  w.createHistoryClient=(options:any)=>createHistoryClient({...options,platform:w});
  w.historyPresentation=historyPresentation;w.renderMarkdown=renderMarkdown;w.toolActivity=toolActivity;
- w.EventSource=class {close(){}};
+ w.EventSource=class {addEventListener(){}close(){}};
  w.copyControl=copyControl;w.eval((await readFile('public/app.js','utf8')).replace(/^import .*\n/gm,''));
  // Initialization is observable in the rendered view, not a private controller hook.
  for(let i=0;i<100&&w.document.getElementById('current-chat-title').textContent!=='First';i++)await new Promise(r=>setTimeout(r,10));

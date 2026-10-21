@@ -9,7 +9,7 @@ await mkdir(out,{recursive:true});const browser=await chromium.launch({executabl
 const report={baseline:!!base,errors:[],measurements:[]};
 try{
  const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});page.on('pageerror',e=>report.errors.push(e.message));page.setDefaultTimeout(5000);
- await page.addInitScript(()=>{window.streams=[];window.EventSource=class{constructor(){window.streams.push(this);queueMicrotask(()=>this.onopen?.())}close(){}};});
+ await page.addInitScript(()=>{window.streams=[];window.EventSource=class{addEventListener(){}constructor(){window.streams.push(this);queueMicrotask(()=>this.onopen?.())}close(){}};});
  await page.route('**/*',async route=>{const u=new URL(route.request().url());assert.equal(u.origin,'https://chat.example.test');
   if(u.pathname==='/api/status')return route.fulfill({json:{connected:true,modelEnabled:true,workspaceEnabled:true,workspaceRepository:'owner/example'}});
   if(u.pathname==='/api/sessions')return route.fulfill({json:[{id:'1',title:'Review the code'}]});if(u.pathname==='/api/workspaces')return route.fulfill({json:{}});if(u.pathname==='/api/events')return route.fulfill({json:view});if(u.pathname==='/api/events/close')return route.fulfill({json:{closed:true}});if(u.pathname==='/favicon.ico')return route.fulfill({status:404});

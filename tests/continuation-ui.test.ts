@@ -19,7 +19,7 @@ async function browser(){
  const html=await readFile('public/index.html','utf8'),script=(await readFile('public/app.js','utf8')).replace(/^import .*\n/gm,'');
  const dom=new JSDOM(html,{url:'https://chat.example.test',runScripts:'outside-only'}),w=dom.window as any,requests:string[]=[];let stream:any;
  w.createChatSession=(options:any)=>createChatSession({...options,platform:w});w.historyPresentation=historyPresentation;w.createHistoryClient=(options:any)=>createHistoryClient({...options,platform:w});w.renderMarkdown=renderMarkdown;w.toolActivity=toolActivity;
- w.EventSource=class{onmessage:any;close(){}constructor(){stream=this}};
+ w.EventSource=class{addEventListener(){}onmessage:any;close(){}constructor(){stream=this}};
  w.fetch=async(path:string,options:any)=>{assert.ok(!options?.method||options.method==='GET');requests.push(path);return {ok:true,json:async()=>path==='/api/sessions'?[{id:'1',title:'Great'}]:{connected:true,modelEnabled:true}}};
  w.copyControl=copyControl;w.eval(script);await new Promise(r=>setTimeout(r,0));
  return {dom,requests,send:(p:ChatProjection)=>stream.onmessage({data:JSON.stringify(p.view())})};

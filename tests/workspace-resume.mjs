@@ -7,7 +7,7 @@ try{
  for(const [name,width,height] of [['mobile',390,844],['desktop',1280,900]]){
   const page=await browser.newPage({viewport:{width,height}});const errors=[];page.on('pageerror',e=>errors.push(e.message));let submits=0,opens=0;
   let state={id:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',phase:'ready',runs:{},activation:{mode:'owner_open'}};
-  await page.addInitScript(()=>{window.streams=[];window.EventSource=class{constructor(){window.streams.push(this);queueMicrotask(()=>this.onopen?.());}close(){}};});
+  await page.addInitScript(()=>{window.streams=[];window.EventSource=class{addEventListener(){}constructor(){window.streams.push(this);queueMicrotask(()=>this.onopen?.());}close(){}};});
   await page.route('**/*',async route=>{const req=route.request(),u=new URL(req.url());assert.equal(u.origin,'https://chat.example.test');
    if(u.pathname==='/api/status')return route.fulfill({json:{connected:true,modelEnabled:true,workspaceEnabled:true,workspaceRepository:'owner/example'}});
    if(u.pathname==='/api/sessions')return route.fulfill({json:[{id:'1',title:'Review the code'}]});
