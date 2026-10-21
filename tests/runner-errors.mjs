@@ -23,7 +23,7 @@ try {
     if (url.pathname === '/api/sessions') return route.fulfill({ json: [{ id: '1', title: 'Offline error fixture' }] });
     if (url.pathname === '/favicon.ico') return route.fulfill({ status: 404 });
     const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-    assert.ok(['index.html', 'app.js', 'history-client.js', 'chat-session.js', 'history-view.js', 'workspace.js', 'markdown.js', 'tool-activity.js', 'copy-control.js', 'style.css'].includes(file));
+    assert.ok(['index.html', 'app.bundle.js', 'app.js', 'history-client.js', 'chat-session.js', 'history-view.js', 'workspace.js', 'markdown.js', 'tool-activity.js', 'copy-control.js', 'style.css'].includes(file));
     return route.fulfill({ body: await readFile('public/' + file), contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html' });
   });
   const emit = async value => { await page.waitForFunction(() => window.offlineStreams.length > 0); await page.evaluate(v => window.offlineStreams.at(-1).onmessage({ data: JSON.stringify(v) }), value); };

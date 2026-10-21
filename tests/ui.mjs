@@ -11,7 +11,7 @@ const p=new ChatProjection();p.apply({type:'snapshot',entries,tools:[],inbox:[],
 const browser=await chromium.launch({executablePath:process.env.CHROME_EXECUTABLE || (process.platform==='darwin'?'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome':'/usr/bin/chromium'),headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
 await mkdir('.runtime/ui-cleanup/legacy-qa',{recursive:true});
 try{
- const page=await browser.newPage({viewport:{width:390,height:844},deviceScaleFactor:1,isMobile:true,hasTouch:true});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(5000);let sessions=[{id:'1',title:'Research durable conversations'}],posts=0,aborts=0,baseline=false,workspaceFeature=false,workspaceId,workspaceState;
+ const page=await browser.newPage({viewport:{width:390,height:844},deviceScaleFactor:1,isMobile:true,hasTouch:true});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(5000);const assets=[];let sessions=[{id:'1',title:'Research durable conversations'}],posts=0,aborts=0,baseline=false,workspaceFeature=false,workspaceId,workspaceState;
  await page.addInitScript(()=>{window.syntheticStreams=[];window.EventSource=class{constructor(){window.syntheticStreams.push(this);queueMicrotask(()=>this.onopen?.());}close(){}};});
  await page.route('**/*',async route=>{
   const u=new URL(route.request().url());assert.equal(u.origin,'https://chat.example.test','No external fixture requests');
@@ -22,12 +22,12 @@ try{
   if(u.pathname==='/api/session-title'){const body=route.request().postDataJSON();const item=sessions.find(s=>s.id===u.searchParams.get('session'));item.title=body.title;return route.fulfill({json:{title:body.title}})}
   if(u.pathname==='/api/workspaces'){if(route.request().method()==='POST'){workspaceId=route.request().postDataJSON().workspaceId;workspaceState={id:workspaceId,phase:'ready',deadline:Date.now()+90*60000,runs:{},gaps:[]};return route.fulfill({json:workspaceState})}return route.fulfill({json:{workspaceId}})}
   if(u.pathname.startsWith('/api/workspaces/')){if(route.request().method()==='POST'){const body=route.request().postDataJSON();if(body.action==='cancel')workspaceState.phase='closed';if(body.action==='export')return route.fulfill({json:{url:'/api/workspaces/'+workspaceId+'/artifact?session=1'}});if(body.target)workspaceState.deadline+=30*60000;}return route.fulfill({json:workspaceState})}
-  const file=u.pathname==='/'?'index.html':u.pathname.slice(1);
-  if(!['index.html','style.css','app.js','markdown.js','tool-activity.js','copy-control.js','workspace.js','history-client.js','chat-session.js','history-view.js'].includes(file))return route.fulfill({status:404,body:''});
+  const file=u.pathname==='/'?'index.html':u.pathname.slice(1);assets.push(file);
+  if(!['index.html','style.css','app.bundle.js','app.js','markdown.js','tool-activity.js','copy-control.js','workspace.js','history-client.js','chat-session.js','history-view.js'].includes(file))return route.fulfill({status:404,body:''});
   return route.fulfill({body:baseline?execFileSync('git',['show','7e4b921:public/'+file]):await readFile('public/'+file),contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html'});
  });
  const emit=async(view=finalView)=>{await page.waitForFunction(()=>window.syntheticStreams?.length>0);await page.evaluate(v=>window.syntheticStreams.at(-1).onmessage({data:JSON.stringify(v)}),view);};
- await page.goto('https://chat.example.test/');await emit();
+ await page.goto('https://chat.example.test/');await emit();assert.deepEqual(assets.slice().sort(),['app.bundle.js','index.html','style.css'],'initial chat must load only the emitted bundle, CSS and HTML');
  assert.equal(await page.locator('.message img, .message script').count(),0);assert.equal(await page.locator('.markdown a').getAttribute('rel'),'noopener noreferrer');assert.equal(await page.locator('.tool-row').count(),3);assert.equal(await page.locator('.completed-tools').count(),0);
  assert.equal(await page.locator('.message').last().locator('.tool-row').count(),3);assert.match(await page.locator('.message').last().textContent(),/Final finding/);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.ok(await page.locator('.markdown pre').evaluate(e=>e.scrollWidth>e.clientWidth));assert.ok(await page.locator('.table-scroll').last().evaluate(e=>e.scrollWidth>e.clientWidth));
@@ -51,6 +51,18 @@ try{
  workspaceFeature=true;await page.reload();await emit();await page.setViewportSize({width:390,height:844});await page.locator('#workspace-panel > summary').click();await page.locator('#workspace-open').click();await page.waitForFunction(()=>document.querySelector('#workspace-state').textContent==='Ready');await page.locator('#prompt').fill('Unsent workspace draft');await page.locator('#workspace-refresh').click();assert.equal(await page.locator('#prompt').inputValue(),'Unsent workspace draft');await page.locator('#workspace-extend-task').click();await page.locator('#workspace-export').click();await page.waitForFunction(()=>!document.querySelector('#workspace-artifact').hidden);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);await page.screenshot({path:'.runtime/ui-cleanup/legacy-qa/mobile-workspace-v1.png'});await page.setViewportSize({width:1280,height:900});await page.screenshot({path:'.runtime/ui-cleanup/legacy-qa/desktop-workspace-v1.png'});await page.locator('#workspace-cancel').click();await page.waitForFunction(()=>document.querySelector('#workspace-state').textContent==='Closed');workspaceFeature=false;await page.reload();await emit();
  const review={...finalView,title:'Explore durable conversations',messages:[{id:'review-user',role:'user',text:'What should I consider for a durable chat?'},{id:'review-answer',role:'assistant',text:'Start with a **persistent conversation** and clear recovery boundaries.\n\nKeep the interface calm: show the answer first, with the sources close by when you want to check them.\n\n- Save each submitted message once.\n- Reconnect to an existing run.\n- Keep public source reads visible.\n\nThese two guides provide useful starting points.',tools:[{id:'review-web-1',roundId:'round-1',label:'Web search',state:'success',summary:'2 sources returned · Durable conversations guide',sources:[{title:'Durable conversations guide',url:'https://example.com/durable-conversations'},{title:'Recovery patterns',url:'https://docs.example.com/recovery'}],detail:'Completed. 2 results returned. Duration: 0.42s.'},{id:'review-web-2',roundId:'round-2',label:'Web search',state:'success',summary:'1 source returned · Reconnect without repeating work',sources:[{title:'Reconnect without repeating work',url:'https://docs.example.com/reconnect'}],detail:'Completed. 1 result returned. Duration: 0.38s.'}]}]};
  for(const variant of ['after']){baseline=variant==='before';await page.reload();for(const [device,width,height] of [['mobile',390,844],['desktop',1280,900]]){await page.setViewportSize({width,height});await emit(review);for(const row of await page.locator('.tool-row').all()){if(await row.getAttribute('open')!==null)await row.locator(':scope > summary').click();}await page.locator('.tool-row > summary').first().scrollIntoViewIfNeeded();await page.screenshot({path:'.runtime/ui-cleanup/legacy-qa/'+variant+'-'+device+'-collapsed.png'});await page.locator('.tool-row > summary').first().click();await page.screenshot({path:'.runtime/ui-cleanup/legacy-qa/'+variant+'-'+device+'-expanded.png'});}}
+ // Exercise selection precedence through the shipped bundle, including a
+ // fresh document without a session query and without replaying a submission.
+ await page.goto('https://chat.example.test/?session=2');await emit();
+ assert.equal(await page.locator('[data-session-id="2"][aria-current]').count(),1);
+ assert.equal(await page.evaluate(()=>localStorage.getItem('pi:last-chat:v1')),'2');
+ await page.goto('https://chat.example.test/');await emit();
+ assert.equal(new URL(page.url()).searchParams.get('session'),'2');
+ assert.equal(await page.locator('[data-session-id="2"][aria-current]').count(),1);
+ await page.goto('https://chat.example.test/?session=1');await emit();
+ assert.equal(await page.locator('[data-session-id="1"][aria-current]').count(),1);
+ assert.equal(await page.evaluate(()=>localStorage.getItem('pi:last-chat:v1')),'1');
+ assert.equal(posts,1,'restoring a remembered or explicitly selected chat must not submit work');
  assert.deepEqual(errors,[]);
  console.log('PASS response-local multiple rounds, long-answer scroll/focus, reload, sessions, safe Markdown and mobile/desktop fixtures');
 }finally{await browser.close()}
