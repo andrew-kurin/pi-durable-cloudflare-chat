@@ -22,6 +22,8 @@ A small, owner-only mobile web chat using Cloudflare's official PiHarness integr
 
 `HOME=/tmp/pi-cloudflare-home XDG_CONFIG_HOME=/tmp/pi-cloudflare-home/.config WRANGLER_SEND_METRICS=false npm run build`
 
+`build:ui` generates the self-contained `public/app.bundle.js`, minified `public/style.css`, Markdown renderer and icon sprite; `check:ui` verifies their exact reproducibility. Edit `public/app.js` and its browser modules, `src/browser/style.css`, and `src/markdown.ts`, then run `npm run build:ui`. The existing unbundled asset URLs remain available. Browser CI rebuilds and exercises the generated bundle and CSS, including the three-request initial chat contract. Marked and Lucide license notices are retained. Authentication and `Cache-Control: no-store` remain unchanged.
+
 Build is `wrangler deploy --dry-run` and does not publish. Local scripts default to no model credentials. Unit tests use faux models and generated test-only JWT keys. See `tests/` for all checks. Workerd tests, if available, fake all provider fetches.
 
 ## Deployment and approvals still required

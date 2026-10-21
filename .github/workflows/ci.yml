@@ -45,6 +45,7 @@ jobs:
           node-version: '24'
       - run: npm ci --no-audit --no-fund
         timeout-minutes: 3
+      - run: npm run build:ui
       - name: Hermetic browser module, focus and scroll smoke
         timeout-minutes: 2
         run: |
