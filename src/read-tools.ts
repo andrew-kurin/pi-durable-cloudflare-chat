@@ -111,7 +111,9 @@ export function readTools(storage:ToolStorage,env:{TAVILY_API_KEY?:string;ENABLE
   return json('https://api.tavily.com/'+endpoint,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify(body)},signal);
  }
  async function cached(name:string,args:unknown,work:()=>Promise<Result>):Promise<Result>{
-  if(!cacheEnabled)return work();
+  // A fresh file call must refetch after source_changed, including warm legacy
+  // pages/errors. wrap() still checks the authoritative per-call memo first.
+  if(!cacheEnabled||name==='github_read'&&(args as {kind?:unknown})?.kind==='file')return work();
   const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([name,args]))))).map(x=>x.toString(16).padStart(2,'0')).join('');
   const key='tools:cache:'+hash.slice(0,2);const old=await storage.get<Cache>(key);if(old?.hash===hash&&old.expires>now()){const hit=cachedResult(old.result);if(hit)return hit;}
   const value=await work();await storage.put(key,{hash,expires:now()+5*60*1000,result:value});return value;
