@@ -48,7 +48,7 @@ try{
  assert.equal(await adapter.read('README.md',signal),'new\n');
  const completed='a'.repeat(64);await adapter.dispatch(completed,['node','-e',"console.log('PASS local synthetic test'); console.error('stderr captured');"],'.',signal);
  await wait(async()=> (await adapter.status(completed,signal)).state==='exited');
- assert.equal((await adapter.status(completed,signal)).exitCode,0);assert.match(await adapter.logs(completed,'stdout',signal),/PASS local/);assert.match(await adapter.logs(completed,'stderr',signal),/stderr captured/);
+ assert.equal((await adapter.status(completed,signal)).exitCode,0);assert.match((await adapter.logs(completed,'stdout',signal)).text,/PASS local/);assert.match((await adapter.logs(completed,'stderr',signal)).text,/stderr captured/);
  const artifact=await adapter.collect(base,[completed],signal);assert.equal(artifact.base,base);assert.match(artifact.patch,/README.md/);assert.match(artifact.patch,/created.txt/);assert.match(artifact.logs[completed+'/stdout'],/PASS local/);
  assert.equal(cli(['exec','--workdir','/workspace/project',name,'git','diff','--cached']).trim(),'','Export must preserve the real Git index');
  const cancelled='b'.repeat(64);await adapter.dispatch(cancelled,['sh','-c','sleep 120 & wait'],'.',signal);

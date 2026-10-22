@@ -29,6 +29,10 @@ The coordinator durably binds each activating operation ID and input fingerprint
 
 New additive Assistant keys are `workspace-activation-op:<session>:<operationId>` and `workspace-auto-stop:<session>`, plus `workspace-submission:<session>:<operationId>` admission deduplication and the predecessor reference above. Existing identity mappings, guest journals, quotas, owner authorization and external-change approvals remain in force. Startup sharing is local to the coordinator instance; after reconstruction the guest controller remains the authority for interrupted initialization rather than silently recloning.
 
+## Tool result contracts
+
+See [model tool result contracts](docs/tool-contracts.md) for bounded text continuation, sanitized file errors and raw-byte log-retention metadata. Existing run IDs, operation fingerprints, cancellation and immutable artifacts keep their established semantics.
+
 ## Waiting for commands
 
 Use `workspace_wait` with the workspace UUID and durable run ID returned by exec for a running command. One call waits up to 20 seconds by default, optionally 10–30 seconds, checking state internally about every two seconds. An invocation memo retains its deadline across tool recovery, and explicit IDs prevent retargeting if the conversation later gets a fresh guest. Missing/stale runs never create a guest or a process. Ordinary status and the UI's 15-second polling remain immediate.
