@@ -1,3 +1,5 @@
+import {WorkspaceFileError} from './workspace-error';
+import {workspaceTextPage,WorkspaceOutputError} from './workspace-output';
 import type {WorkspaceRequest} from './workspace-tools';
 export interface WorkspaceLimits {taskMs:number;commandMs:number;idleMs:number;warningMs:number;graceMs:number;artifactMs:number;operationMs:number;setupMs:number}
 export const DEFAULT_WORKSPACE_LIMITS:WorkspaceLimits={taskMs:90*60000,commandMs:30*60000,idleMs:15*60000,warningMs:5*60000,graceMs:10000,artifactMs:20000,operationMs:30000,setupMs:5*60000};
@@ -5,14 +7,19 @@ export function workspaceLimits(raw?:string):WorkspaceLimits{const limits={...DE
 export type RunState='dispatching'|'running'|'done'|'interrupted';
 export interface WorkspaceRun {id:string;state:RunState;command:string;startedAt:number;deadline:number;exitCode?:number;reason?:string}
 export interface WorkspaceState {id:string;session:string;repo:string;createdAt?:number;phase:'initializing'|'ready'|'stopping'|'closed';base?:string;deadline:number;lastUsed:number;active?:string;runs:Record<string,WorkspaceRun>;gaps:string[];stopAt?:number;cleanupAttempted?:boolean;untouched?:boolean;stopReason?:'expired'|'cancelled'|'interrupted'|'initialization-failed'}
-export interface WorkspaceExport {base:string;patch:string;logs:Record<string,string>;gaps:string[]}
+export interface WorkspaceLog {text:string;retention:'tail';limitBytes:number;retainedBytes:number|null;totalBytes:number|null;droppedBytes:number|null;truncated:boolean|null;available:boolean;notice?:string}
+export interface WorkspaceExport {base:string;patch:string;logs:Record<string,string>;gaps:string[];logMetadata?:Record<string,Omit<WorkspaceLog,'text'>>}
+export function workspaceLog(value:string|WorkspaceLog|undefined):WorkspaceLog {
+ if(typeof value==='object'&&value!==null)return value;
+ return {text:value??'',retention:'tail',limitBytes:16384,retainedBytes:null,totalBytes:null,droppedBytes:null,truncated:null,available:value!==undefined,notice:value===undefined?'Log unavailable after container stop. Discarded output cannot be recovered.':'Legacy recorded text has no raw byte counters; truncation and dropped byte counts are unknown. Discarded output cannot be recovered.'};
+}
 export interface WorkspaceAdapter {
  open(repo:string,signal:AbortSignal):Promise<string>;
  read(path:string,signal:AbortSignal):Promise<string>;
  edit(path:string,oldText:string,newText:string,signal:AbortSignal):Promise<void>;
  dispatch(runId:string,argv:string[],cwd:string,signal:AbortSignal):Promise<void>;
  status(runId:string,signal:AbortSignal):Promise<{state:'running'|'starting'|'exited'|'lost';exitCode?:number}>;
- logs(runId:string,stream:'stdout'|'stderr',signal:AbortSignal):Promise<string>;
+ logs(runId:string,stream:'stdout'|'stderr',signal:AbortSignal):Promise<string|WorkspaceLog>;
  terminate(runId:string,signal:AbortSignal):Promise<void>;
  collect(base:string,runIds:string[],signal:AbortSignal):Promise<WorkspaceExport>;
  stop():Promise<void>;
@@ -42,7 +49,7 @@ export class WorkspaceController {
   return {...s,remaining,canAutoReplace:s.phase==='closed'&&s.untouched===true&&s.stopReason==='expired',warning:warnings.length?warnings.join(' ')+' The owner can explicitly extend the task or active command. A warning does not mean the command finished.':undefined,artifactUrl:`/api/workspaces/${s.id}/artifact?session=${s.session}`};
  }
  private async poll(s:WorkspaceState){if(!s.active||(s.phase==='stopping'&&s.cleanupAttempted))return;const r=s.runs[s.active];let result;try{result=await this.io(signal=>this.adapter.status(r.id,signal))}catch{result={state:'lost' as const}}if(result.state==='exited'){r.state='done';r.exitCode=result.exitCode;s.active=undefined;s.lastUsed=this.now();await this.captureLogs(s,r)}else if(result.state==='lost'||(result.state==='starting'&&this.now()-r.startedAt>this.limits.operationMs)){r.state='interrupted';r.reason='Process state was lost or ambiguous. Not restarted.';s.gaps.push(r.reason);await this.beginStop(s);}else r.state='running';}
- private async captureLogs(s:WorkspaceState,r:WorkspaceRun){for(const stream of ['stdout','stderr'] as const)try{const text=await this.io(signal=>this.adapter.logs(r.id,stream,signal));await this.store.put(`log:${r.id}:${stream}`,text)}catch{s.gaps.push(`Log unavailable: ${r.id}/${stream}`)}}
+ private async captureLogs(s:WorkspaceState,r:WorkspaceRun){for(const stream of ['stdout','stderr'] as const)try{const log=workspaceLog(await this.io(signal=>this.adapter.logs(r.id,stream,signal)));await this.store.put(`log:${r.id}:${stream}`,log)}catch{s.gaps.push(`Log unavailable: ${r.id}/${stream}`)}}
  async request(request:WorkspaceRequest,admit:()=>Promise<void>=async()=>{}){if(request.action==='status'&&this.activeAbort){const current=await this.state();if(current.id!==request.workspaceId)throw Error('Workspace identity mismatch');return this.summary(current)}if(request.action==='cancel'){const current=await this.store.get<WorkspaceState>('state');const prior=await this.store.get('operation:'+request.operationId);if(current?.id===request.workspaceId&&(!request.runId||request.runId===current.active)&&/^[a-f0-9]{64}$/.test(request.operationId)&&!prior)this.activeAbort?.abort();}return this.serial(async()=>{
   if(!['status','logs','cancel'].includes(request.action))await admit();
   const s=await this.state();if(s.id!==request.workspaceId)throw Error('Workspace identity mismatch');
@@ -50,7 +57,12 @@ export class WorkspaceController {
   const encoded=new TextEncoder().encode(JSON.stringify(request));const digest=await crypto.subtle.digest('SHA-256',encoded);const fingerprint=Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,'0')).join(''),key='operation:'+request.operationId;const prior=await this.store.get<{fingerprint:string;result?:unknown}>(key);
   if(prior){if(prior.fingerprint!==fingerprint)throw Error('Operation ID already used');if(request.action==='exec'){await this.poll(s);await this.enforce(s);await this.save(s);return this.summary(s)}if(prior.result!==undefined)return prior.result;throw Error('Previous operation is interrupted; it was not replayed')}
   if(request.action==='status'){await this.poll(s);await this.enforce(s);await this.save(s);return this.summary(s)}
-  if(request.action==='logs'){if(!s.runs[request.runId])throw Error('Unknown run');return {runId:request.runId,stream:request.stream,text:await this.store.get<string>(`log:${request.runId}:${request.stream}`)??(s.phase==='ready'?await this.io(signal=>this.adapter.logs(request.runId,request.stream,signal)):'Log unavailable after container stop.')}}
+  if(request.action==='logs'){
+   if(!s.runs[request.runId])throw Error('Unknown run');
+   const saved=await this.store.get<string|WorkspaceLog>(`log:${request.runId}:${request.stream}`);
+   const log=workspaceLog(saved??(s.phase==='ready'?await this.io(signal=>this.adapter.logs(request.runId,request.stream,signal)):undefined));
+   try{const page=await workspaceTextPage(log.text,request,{workspaceId:s.id,runId:request.runId,stream:request.stream});return {runId:request.runId,stream:request.stream,...log,...page,truncated:log.truncated,pageTruncated:page.truncated,incomplete:page.incomplete||log.truncated!==false||!log.available}}catch(error){if(error instanceof WorkspaceOutputError)return {error:error.message,code:error.code,nextStep:error.nextStep};throw error}
+  }
   // Export readiness is checked in this serial section before reserving its ID.
   // Once collection can start, all failures must retain the durable replay fence.
   if(request.action!=='export')await this.store.put(key,{fingerprint});
@@ -60,7 +72,7 @@ export class WorkspaceController {
   if(request.action==='export'){if(s.active){await this.save(s);throw Error('Wait for the command before exporting a consistent patch')}await this.store.put(key,{fingerprint});}
   s.lastUsed=this.now();let result:unknown;
   try{
-   if(request.action==='read')result={path:projectPath(request.path),text:await this.io(signal=>this.adapter.read(projectPath(request.path),signal))};
+   if(request.action==='read'){const path=projectPath(request.path),text=await this.io(signal=>this.adapter.read(path,signal));result={path,...await workspaceTextPage(text,request,{workspaceId:s.id,path})};}
    if(request.action==='edit'){s.untouched=false;await this.save(s);await this.io(signal=>this.adapter.edit(projectPath(request.path),request.oldText,request.newText,signal));result={edited:request.path}}
    if(request.action==='exec'){
     if(!Array.isArray(request.argv)||!request.argv.length||request.argv.length>64||JSON.stringify(request.argv).length>8000||request.argv.some(v=>typeof v!=='string'||v.length>8000||v.includes('\0')))throw Error('Invalid argv');
@@ -70,7 +82,7 @@ export class WorkspaceController {
     try{await this.io(signal=>this.adapter.dispatch(run.id,request.argv,projectPath(request.cwd??'.'),signal));run.state='running'}catch{run.state='interrupted';run.reason='Dispatch was ambiguous; command was not replayed.';s.gaps.push(run.reason);await this.beginStop(s)}result=this.summary(s);
    }
    if(request.action==='export')result=await this.export(s,request.operationId);
-  }catch(error){await this.save(s);throw error}
+  }catch(error){if(error instanceof WorkspaceFileError||error instanceof WorkspaceOutputError)result={error:error.message,code:error.code,nextStep:error.nextStep};else{await this.save(s);throw error}}
   await this.save(s);await this.store.put(key,{fingerprint,result});return result;
  })}
  private async export(s:WorkspaceState,id:string){return this.io(async signal=>{const prior=await this.store.get<{chunks:number;gaps:string[]}>('artifact:'+id);if(prior)return {artifactId:id,url:`/api/workspaces/${s.id}/artifact?export=${id}&session=${s.session}`,gaps:prior.gaps};if(!s.base)throw Error('No base available');const artifact=await this.adapter.collect(s.base,Object.keys(s.runs),signal);if(s.active)artifact.gaps.push('Patch captured while an interrupted command may still be stopping.');const text=JSON.stringify(artifact),chunks=Math.ceil(text.length/16000);for(let i=0;i<chunks;i++){signal.throwIfAborted();await this.store.put(`artifact:${id}:${i}`,text.slice(i*16000,(i+1)*16000));}signal.throwIfAborted();await this.store.put('artifact:'+id,{chunks,gaps:artifact.gaps});await this.store.put('latestArtifact',id);return {artifactId:id,url:`/api/workspaces/${s.id}/artifact?export=${id}&session=${s.session}`,gaps:artifact.gaps}},this.limits.artifactMs)}
