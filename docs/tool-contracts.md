@@ -21,6 +21,14 @@ arguments to pin the resource and avoid mixing versions. Workspace text pages
 contain at most 6,000 code points. Files still have their existing byte limits;
 pagination does not bypass them.
 
+Fresh `github_read` calls with `kind: "file"` bypass the shared five-minute
+cache, including directory listings and previously cached pages or errors.
+After `source_changed`, make a new first-page call without `expectedSha` and
+then use its returned continuation. Replaying the same durable tool call still
+returns its original memoized result. Other read-tool caches and the shared
+GitHub request budgets remain unchanged; repeated fresh file/directory calls
+now spend provider requests rather than using the shared cache.
+
 Text results expose `offset`, `totalChars`, `nextOffset`, `incomplete` and
 `continuation`. A null continuation means no further retained content is
 available from that result. Changed content returns a sanitized error and asks

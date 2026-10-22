@@ -7,9 +7,9 @@ import {fauxProvider,fauxAssistantMessage,fauxText,fauxToolCall} from '@earendil
 import {createRegistry,Harness,MemoryStorage,watchEvents} from '@earendil-works/pi-durable';
 import {ChatProjection} from '../src/projector';
 class Storage implements ToolStorage {
- data=new Map<string,unknown>();queue=Promise.resolve();
- async get<T>(k:string){return this.data.get(k) as T|undefined;}
- async put<T>(k:string,v:T){this.data.set(k,v);}
+ data=new Map<string,unknown>();queue=Promise.resolve();cacheReads=0;cacheWrites=0;
+ async get<T>(k:string){if(k.startsWith('tools:cache:'))this.cacheReads++;return this.data.get(k) as T|undefined;}
+ async put<T>(k:string,v:T){if(k.startsWith('tools:cache:'))this.cacheWrites++;this.data.set(k,v);}
  async transaction<T>(fn:(tx:Storage)=>Promise<T>){const before=this.queue;let release!:()=>void;this.queue=new Promise(r=>release=r);await before;const snapshot=new Map(this.data);try{return await fn(this);}catch(e){this.data=snapshot;throw e;}finally{release();}}
 }
 const enabled={ENABLE_WEB_SEARCH:'true',TAVILY_API_KEY:'synthetic-not-a-real-key'};
@@ -125,6 +125,91 @@ test('continuation rejects changed revision or an unguarded/invalid range withou
  const first=boundedData(await h.run('github_read',{repo:'owner/repo',kind:'file',path:'source.txt'}));assert.ok(first.continuation);sha='b'.repeat(40);
  const changed=boundedData(await h.run('github_read',first.continuation));assert.equal(changed.code,'source_changed');assert.equal(changed.incomplete,true);assert.equal(changed.continuation,null);assert.equal(changed.text,undefined);assert.match(changed.error,/Start at offset 0/);
  for(const args of [{offset:1},{offset:-1},{offset:30000,expectedSha:sha}]){const data=boundedData(await h.run('github_read',{repo:'owner/repo',kind:'file',path:'source.txt',...args}));assert.match(data.error,/Invalid read offset/);}
+});
+test('fresh GitHub file restarts recover before cache expiry while durable memo replays stay authoritative',async()=>{
+ for(const args of [
+  {repo:'owner/repo',kind:'file',path:'source.txt'},
+  {repo:'owner/repo',kind:'file',path:'source.txt',ref:'main',offset:0},
+  {offset:0,ref:'release',path:'docs/source.txt',kind:'file',repo:'owner/repo'},
+ ]){
+  let version='a';const h=harness(enabled,u=>Response.json(u.includes('/contents/')?{type:'file',encoding:'base64',size:20000,content:Buffer.from(version.repeat(20000)).toString('base64'),sha:version.repeat(40),html_url:'https://github.com/owner/repo/blob/main/source.txt'}:{private:false}));
+  const first=boundedData(await h.run('github_read',args,'first'));assert.ok(first.continuation);assert.equal(h.calls.length,2);
+  version='b';const changed=boundedData(await h.run('github_read',first.continuation,'changed'));assert.equal(changed.code,'source_changed');assert.equal(h.calls.length,4);
+  const restarted=boundedData(await h.run('github_read',{...args},'restart'));assert.equal(restarted.sha,'b'.repeat(40));assert.equal(h.calls.length,6);
+  const last=boundedData(await h.run('github_read',restarted.continuation));assert.equal(last.sha,restarted.sha);assert.equal(last.continuation,null);assert.equal(restarted.text+last.text,'b'.repeat(20000));assert.equal(h.calls.length,8);
+  h.advance(600000);
+  assert.equal(boundedData(await h.run('github_read',args,'first')).sha,'a'.repeat(40));
+  assert.equal(boundedData(await h.run('github_read',first.continuation,'changed')).code,'source_changed');
+  assert.equal(boundedData(await h.run('github_read',args,'restart')).sha,'b'.repeat(40));assert.equal(h.calls.length,8);
+  assert.equal(h.storage.cacheReads,0);assert.equal(h.storage.cacheWrites,0);
+ }
+});
+test('fresh GitHub file calls ignore existing poisoned first-page and mismatch caches without clearing them',async()=>{
+ for(const args of [
+  {repo:'owner/repo',kind:'file',path:'source.txt'},
+  {repo:'owner/repo',kind:'file',path:'source.txt',ref:'main',offset:0},
+  {offset:0,path:'docs/source.txt',kind:'file',ref:'release',repo:'owner/repo'},
+ ]){
+  let version='b';const h=harness(enabled,u=>Response.json(u.includes('/contents/')?{type:'file',encoding:'base64',size:20000,content:Buffer.from(version.repeat(20000)).toString('base64'),sha:version.repeat(40),html_url:'https://github.com/owner/repo/blob/main/source.txt'}:{private:false}));
+  const continuation={repo:args.repo,kind:'file',path:args.path,...(args.ref?{ref:args.ref}:{}),offset:12000,expectedSha:'a'.repeat(40)};
+  for(const [input,data] of [[args,{sha:'a'.repeat(40),text:'cached A',continuation}],[continuation,{sha:'b'.repeat(40),code:'source_changed',error:'File changed since the previous page. Start at offset 0 before continuing.',incomplete:true,continuation:null,nextOffset:null}]] as const){
+   const hash=Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(['github_read',input])))).toString('hex');
+   await h.storage.put('tools:cache:'+hash.slice(0,2),{hash,expires:Date.UTC(2026,9,11)+300000,result:{output:[{type:'text',text:JSON.stringify({notice:'Untrusted external content.',data})}]}});
+  }
+  const before=[...h.storage.data].filter(([key])=>key.startsWith('tools:cache:'));assert.equal(before.length,2);h.storage.cacheReads=0;h.storage.cacheWrites=0;
+  const restarted=boundedData(await h.run('github_read',{...args}));assert.equal(restarted.sha,'b'.repeat(40));assert.equal(h.calls.length,2);
+  version='c';const freshMismatch=boundedData(await h.run('github_read',continuation));assert.equal(freshMismatch.code,'source_changed');assert.equal(freshMismatch.sha,'c'.repeat(40));assert.equal(h.calls.length,4);
+  const current=boundedData(await h.run('github_read',args));const last=boundedData(await h.run('github_read',current.continuation));assert.equal(current.text+last.text,'c'.repeat(20000));assert.equal(h.calls.length,8);
+  assert.equal(h.storage.cacheReads,0);assert.equal(h.storage.cacheWrites,0);assert.deepEqual([...h.storage.data].filter(([key])=>key.startsWith('tools:cache:')),before);
+ }
+});
+test('other public read kinds keep their shared caches and charge budgets only on cache misses',async()=>{
+ const cases:[string,any,'github'|'tavily',number][]=[
+  ['github_read',{repo:'owner/repo',kind:'repository'},'github',1],
+  ['github_read',{repo:'owner/repo',kind:'issue',number:1},'github',2],
+  ['github_read',{repo:'owner/repo',kind:'pull_request',number:1},'github',2],
+  ['github_search',{kind:'repositories',query:'cached fixture'},'github',1],
+  ['web_search',{query:'cached fixture'},'tavily',1],
+  ['fetch_page',{url:'https://example.com/docs'},'tavily',1],
+ ];
+ for(const [name,args,vendor,requests] of cases){
+  const h=harness(enabled,u=>Response.json(u.includes('tavily.com/extract')?{results:[{url:'https://example.com/docs',raw_content:'fixture'}]}:u.includes('tavily.com/search')?{results:[]}:u.includes('/search/')?{items:[],total_count:0}:/\/(issues|pulls)\//.test(u)?{html_url:'https://github.com/owner/repo/issues/1',title:'fixture',body:'fixture body',state:'open'}:{private:false,html_url:'https://github.com/owner/repo',description:'fixture',default_branch:'main'}));
+  const first=await h.run(name,args);assert.equal(h.calls.length,requests);assert.deepEqual(await h.run(name,{...args}),first);assert.equal(h.calls.length,requests);
+  assert.ok(h.storage.cacheReads>0);assert.equal(h.storage.cacheWrites,1);
+  assert.equal((await h.storage.get<any>(vendor==='github'?'tools:github:hour':'tools:tavily:day')).count,requests);
+ }
+});
+test('uncached GitHub file requests retain the shared hourly and daily admission budgets',async()=>{
+ const handler=(u:string)=>Response.json(u.includes('/contents/')?{type:'file',encoding:'base64',size:5,content:btoa('hello'),sha:'a'.repeat(40),html_url:'https://github.com/owner/repo/blob/main/source.txt'}:{private:false});
+ const args={repo:'owner/repo',kind:'file',path:'source.txt'},hour=harness(enabled,handler);
+ for(let i=0;i<20;i++)assert.equal(boundedData(await hour.run('github_read',args)).text,'hello');
+ assert.equal(hour.calls.length,40);assert.equal(hour.storage.cacheReads,0);assert.equal(hour.storage.cacheWrites,0);
+ assert.match(boundedData(await hour.run('github_read',args)).error,/budget reached/);assert.equal(hour.calls.length,40);
+ assert.match(boundedData(await hour.run('github_search',{kind:'repositories',query:'same shared budget'})).error,/budget reached/);assert.equal(hour.calls.length,40);
+ assert.equal((await hour.storage.get<any>('tools:github:hour')).count,40);assert.equal((await hour.storage.get<any>('tools:github:day')).count,40);
+ const day=harness(enabled,handler);await day.storage.put('tools:github:day',{period:'2026-10-11',count:199});
+ assert.match(boundedData(await day.run('github_read',args)).error,/budget reached/);assert.equal(day.calls.length,1);assert.equal((await day.storage.get<any>('tools:github:day')).count,200);assert.equal((await day.storage.get<any>('tools:github:hour')).count,1);
+});
+test('GitHub directory listings sharing kind file also refetch on fresh calls',async()=>{
+ let path='a.txt';const h=harness(enabled,u=>Response.json(u.includes('/contents/')?[{path,type:'file',html_url:'https://github.com/owner/repo/blob/main/'+path}]:{private:false}));
+ const args={repo:'owner/repo',kind:'file',path:'docs'};
+ assert.equal(boundedData(await h.run('github_read',args)).entries[0].path,'a.txt');path='b.txt';assert.equal(boundedData(await h.run('github_read',args)).entries[0].path,'b.txt');
+ assert.equal(h.calls.length,4);assert.equal(h.storage.cacheReads,0);assert.equal(h.storage.cacheWrites,0);
+});
+test('actual Pi harness recovers GitHub file pagination with cache enabled and faux responses only',async()=>{
+ let version='a',calls=0,observed=0,first:any,restarted:any;const storage=new Storage(),faux=fauxProvider();
+ const request=(args:any,id:string)=>fauxAssistantMessage([fauxToolCall('github_read',args,{id})],{stopReason:'toolUse'});
+ const data=(transcript:any)=>{const message=transcript.messages.filter((m:any)=>m.role==='toolResult').at(-1);const raw=message.content.filter((c:any)=>c.type==='text').map((c:any)=>c.text).join('');assert.ok(Buffer.byteLength(raw)<=READ_OUTPUT_MAX_BYTES);observed++;return JSON.parse(raw).data;};
+ const args={repo:'owner/repo',kind:'file',path:'source.txt',ref:'main',offset:0};
+ faux.setResponses([
+  request(args,'file-first'),
+  transcript=>{first=data(transcript);assert.equal(first.sha,'a'.repeat(40));version='b';return request(first.continuation,'file-changed');},
+  transcript=>{assert.equal(data(transcript).code,'source_changed');return request(args,'file-restart');},
+  transcript=>{restarted=data(transcript);assert.equal(restarted.sha,'b'.repeat(40));return request(restarted.continuation,'file-next');},
+  transcript=>{const last=data(transcript);assert.equal(last.sha,restarted.sha);assert.equal(last.continuation,null);assert.equal(restarted.text+last.text,'b'.repeat(20000));return fauxAssistantMessage([fauxText('Recovered the complete current file.')]);},
+ ]);
+ const models=createModels();models.setProvider(faux.provider);const registry=createRegistry();registry.install(readTools(storage,{},(async(input)=>{calls++;return Response.json(String(input).includes('/contents/')?{type:'file',encoding:'base64',size:20000,content:Buffer.from(version.repeat(20000)).toString('base64'),sha:version.repeat(40),html_url:'https://github.com/owner/repo/blob/main/source.txt'}:{private:false});}) as typeof fetch));
+ const h=await Harness.open(new MemoryStorage(),{models,registry},context);try{const root=await h.root(context,{agent:{model:{provider:'faux',modelId:'faux-1'}}});assert.equal((await(await root.submit({type:'input',content:'Read fixture',requestId:'offline-file-cache-recovery'},context)).wait(context)).status,'done');assert.equal(observed,4);assert.equal(calls,8);assert.equal(storage.cacheReads,0);assert.equal(storage.cacheWrites,0);}finally{await h.close(context);}
 });
 test('normalized public URLs cannot grow beyond the returned reference budget',()=>{
  assert.throws(()=>publicUrl('https://example.com/'+('漢'.repeat(1000))),/URL too long/);
