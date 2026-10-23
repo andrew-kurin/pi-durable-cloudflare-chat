@@ -110,6 +110,8 @@ except FileNotFoundError: result['notice']='Recorded log is unavailable; discard
 except Exception: result['notice']='Recorded log snapshot is unavailable or invalid; discarded output cannot be recovered.'
 print(json.dumps(result,separators=(',',':')))
 `;
+export const SNAPSHOT_SCRIPT='set -eu; export GIT_INDEX_FILE=$(mktemp); trap \'rm -f "$GIT_INDEX_FILE"\' EXIT; rm -f "$GIT_INDEX_FILE"; git read-tree HEAD; git add -A; git write-tree';
+export const EXPORT_SCRIPT='set -eu; export GIT_INDEX_FILE=$(mktemp); trap \'rm -f "$GIT_INDEX_FILE"\' EXIT; rm -f "$GIT_INDEX_FILE"; git read-tree "$1"; git add -A; git write-tree; git diff --cached --binary "$1"';
 export class ContainerWorkspaceAdapter implements WorkspaceAdapter {
  constructor(private container:Container,private image:string){}
  private async run(argv:string[],signal:AbortSignal,cwd=ROOT,input?:string,cap=512000){
@@ -119,14 +121,17 @@ export class ContainerWorkspaceAdapter implements WorkspaceAdapter {
   const take=async(stream:ReadableStream|null)=>{if(!stream)return '';const reader=stream.getReader();const chunks:Uint8Array[]=[];let count=0;try{while(true){const {done,value}=await reader.read();if(done)break;count+=value.byteLength;if(count>cap){p.kill();throw Error('Workspace output limit reached')}chunks.push(value)}}finally{reader.releaseLock()}const bytes=new Uint8Array(count);let at=0;for(const part of chunks){bytes.set(part,at);at+=part.length}return new TextDecoder().decode(bytes)};
   const [stdout,stderr,exitCode]=await Promise.all([take(p.stdout),take(p.stderr),p.exitCode]);if(exitCode!==0){if(argv[0]==='python3'&&argv[2]===FILE_OPERATION)throw workspaceFileError(stderr)??new WorkspaceFileError('file_operation_failed');throw Error('Workspace command failed')}return stdout;
  }
- async open(repo:string,signal:AbortSignal){
+ async open(repo:string,signal:AbortSignal,revision?:string){
+  if(revision&&!/^[a-f0-9]{40}$/.test(revision))throw Error('Invalid source revision');
   if(this.container.running)throw Error('Refusing to reuse an unknown running guest');
   this.container.start({image:this.image,entrypoint:['sleep','infinity'],enableInternet:true,env:{GIT_TERMINAL_PROMPT:'0'},instance:'standard-1'});
   await this.container.setInactivityTimeout(DEFAULT_WORKSPACE_LIMITS.idleMs);
   await this.run(['mkdir','-p','/workspace',PROCESSES],signal,'/');
   await this.run(['git','clone','--','https://github.com/'+repo+'.git',ROOT],signal,'/workspace');
-  const base=(await this.run(['git','rev-parse','HEAD'],signal)).trim();if(!/^[a-f0-9]{40}$/.test(base))throw Error('Invalid base');return base;
+  if(revision){await this.run(['git','fetch','--no-tags','origin',revision],signal);await this.run(['git','checkout','--detach',revision],signal);}
+  const base=(await this.run(['git','rev-parse','HEAD'],signal)).trim();if(revision&&base!==revision)throw Error('Source revision mismatch');if(!/^[a-f0-9]{40}$/.test(base))throw Error('Invalid base');return base;
  }
+ async snapshot(signal:AbortSignal){return (await this.run(['sh','-c',SNAPSHOT_SCRIPT,'sh'],signal)).trim();}
  async read(path:string,signal:AbortSignal){return this.run(['python3','-c',FILE_OPERATION,'read',projectPath(path)],signal,ROOT,undefined,64000)}
  async edit(path:string,oldText:string,newText:string,signal:AbortSignal){if(oldText.length>64000||newText.length>64000)throw new WorkspaceFileError('edit_too_large');await this.run(['python3','-c',FILE_OPERATION,'edit',projectPath(path)],signal,ROOT,JSON.stringify({oldText,newText}));}
  async dispatch(id:string,argv:string[],cwd:string,signal:AbortSignal){
@@ -143,9 +148,9 @@ export class ContainerWorkspaceAdapter implements WorkspaceAdapter {
  async collect(base:string,ids:string[],signal:AbortSignal):Promise<WorkspaceExport>{
   if(!/^[a-f0-9]{40}$/.test(base))throw Error('Invalid base');
   // Dedicated temporary index includes new/untracked files without changing the real index.
-  const patch=await this.run(['sh','-c','export GIT_INDEX_FILE=/tmp/pi-export-index; rm -f "$GIT_INDEX_FILE"; git read-tree "$1" && git add -A && git diff --cached --binary "$1"; rc=$?; rm -f "$GIT_INDEX_FILE"; exit "$rc"','sh',base],signal);
+  const snapshot=await this.run(['sh','-c',EXPORT_SCRIPT,'sh',base],signal);const newline=snapshot.indexOf('\n'),treeSha=snapshot.slice(0,newline),patch=snapshot.slice(newline+1);if(newline<0||!/^[a-f0-9]{40}$/.test(treeSha))throw Error('Export tree unavailable');
   const logs:Record<string,string>={},logMetadata:Record<string,Omit<WorkspaceLog,'text'>>={},gaps:string[]=[];for(const id of ids)for(const stream of ['stdout','stderr'] as const)try{const {text,...metadata}=await this.logs(id,stream,signal);logs[id+'/'+stream]=text;logMetadata[id+'/'+stream]=metadata;if(!metadata.available)gaps.push('Log unavailable: '+id+'/'+stream)}catch{gaps.push('Log unavailable: '+id+'/'+stream)}
-  if(ids.length)gaps.push('Logs contain only the last 16 KiB of each stream; discarded bytes are unavailable.');return {base,patch,logs,logMetadata,gaps};
+  if(ids.length)gaps.push('Logs contain only the last 16 KiB of each stream; discarded bytes are unavailable.');return {base,treeSha,patch,logs,logMetadata,gaps};
  }
  async stop(){try{if(this.container.running)this.container.signal(9)}finally{await this.container.destroy()}}
  async keepAlive(idleMs:number){if(!this.container.running)throw Error('Container lost');await this.container.setInactivityTimeout(idleMs)}

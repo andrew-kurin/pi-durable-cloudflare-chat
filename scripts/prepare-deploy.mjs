@@ -31,12 +31,16 @@ const webSearchEnabled = target === 'staging' ? 'false' : flag('ENABLE_WEB_SEARC
 const webSearchTest = target === 'staging' ? 'false' : flag('ENABLE_WEB_SEARCH_TEST');
 const workspaceProvisioned = flag('PROVISION_WORKSPACE');
 const workspaceEnabled = flag('ENABLE_WORKSPACE');
+const proposalsEnabled=target==='staging'?'false':flag('ENABLE_HARNESS_PROPOSALS');
+const publicationEndpoint=proposalsEnabled==='true'?required('PUBLICATION_ENDPOINT'):'';
+if(proposalsEnabled==='true'){const u=new URL(publicationEndpoint);if(u.protocol!=='https:'||u.username||u.password||u.pathname!=='/'||u.search||u.hash||workspaceEnabled!=='true')throw Error('Draft PR proposals require workspaces and an exact HTTPS publisher origin');}
 const workspaceSmoke = target === 'staging' ? workspaceEnabled : flag('ENABLE_WORKSPACE_SMOKE');
 if (workspaceSmoke === 'true' && workspaceEnabled === 'true' && target === 'production') throw new Error('Disable ordinary workspace tools during the native smoke');
 if (workspaceSmoke === 'true' && workspaceProvisioned !== 'true') throw new Error('Workspace smoke requires explicit provisioning');
 if (workspaceEnabled === 'true' && workspaceProvisioned !== 'true') throw new Error('Workspace activation requires explicit provisioning');
 const repository = process.env.WORKSPACE_REPOSITORY?.trim() || '';
 const image = process.env.WORKSPACE_IMAGE_REFERENCE?.trim() || '';
+if(proposalsEnabled==='true'&&repository!=='andrew-kurin/pi-durable-cloudflare-chat')throw Error('Draft PR proposals support only the fixed harness repository');
 if (webSearchEnabled === 'true' && webSearchTest === 'true') throw new Error('Disable search test mode before enabling normal web search');
 if (runnerEnabled === 'true' && (modelEnabled !== 'true' || loginEnabled === 'true')) throw new Error('Runner requires model use with subscription login disabled');
 if (modelEnabled === 'true' && loginEnabled === 'true') throw new Error('Disable subscription setup before enabling model use');
@@ -96,6 +100,7 @@ if (target === 'staging') config.observability = { enabled: false };
 const mode = modelEnabled === 'true' ? 'chat' : loginEnabled === 'true' ? 'setup' : 'off';
 config.define = { ...(config.define || {}), PI_DEPLOYMENT_MODE: JSON.stringify(`${mode}:web-${webSearchEnabled}:test-${webSearchTest}:origin-${app.hostname}`) };
 if (workspaceProvisioned === 'true') config.define.PI_DEPLOYMENT_MODE = JSON.stringify(`${mode}:web-${webSearchEnabled}:test-${webSearchTest}:origin-${app.hostname}:workspace-${workspaceEnabled}:smoke-${workspaceSmoke}:${image}:${repository}`);
+if(proposalsEnabled==='true')config.define.PI_DEPLOYMENT_MODE=JSON.stringify(JSON.parse(config.define.PI_DEPLOYMENT_MODE)+':proposals-'+publicationEndpoint);
 if(grokEnabled==='true')config.define.PI_DEPLOYMENT_MODE=JSON.stringify(JSON.parse(config.define.PI_DEPLOYMENT_MODE)+':grok-true');
 if (runnerEnabled === 'true') config.define.PI_DEPLOYMENT_MODE = JSON.stringify(JSON.parse(config.define.PI_DEPLOYMENT_MODE) + ':runner-' + runnerEndpoint);
 config.define.PI_DEPLOYMENT_MODE=JSON.stringify(JSON.parse(config.define.PI_DEPLOYMENT_MODE)+':maintenance-'+maintenanceMode+':revision-'+revision);
@@ -113,8 +118,11 @@ config.vars = {
   ENABLE_WEB_SEARCH: webSearchEnabled,
   ENABLE_WEB_SEARCH_TEST: webSearchTest,
   ENABLE_WORKSPACE: workspaceEnabled,
+  ENABLE_HARNESS_PROPOSALS:proposalsEnabled,
   ENABLE_WORKSPACE_SMOKE: workspaceSmoke,
 };
+if(proposalsEnabled==='true')config.vars.PUBLICATION_ENDPOINT=publicationEndpoint;
+// PUBLICATION_TRANSPORT_KEY remains a separately approved Worker secret.
 if (runnerEnabled === 'true') config.vars.MODEL_RUNNER_ENDPOINT = runnerEndpoint;
 // MODEL_RUNNER_TRANSPORT_KEY is provisioned separately as a Worker secret.
 if (workspaceProvisioned === 'true') Object.assign(config.vars, { WORKSPACE_REPOSITORY: repository, WORKSPACE_IMAGE: 'workspace' });

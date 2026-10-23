@@ -33,6 +33,10 @@ New additive Assistant keys are `workspace-activation-op:<session>:<operationId>
 
 See [model tool result contracts](docs/tool-contracts.md) for bounded text continuation, sanitized file errors and raw-byte log-retention metadata. Existing run IDs, operation fingerprints, cancellation and immutable artifacts keep their established semantics.
 
+## Optional harness proposals
+
+The separately gated [harness proposal milestone](docs/harness-proposals.md) adds exact source/check metadata to new exports and two optional model tools for proposal/status. A separate owner review page authorizes each signed draft PR through an isolated publisher. This opt-in supersedes the V1 limitation on PR publication only after its separately approved setup; normal workspace mode still has no publication credentials or automatic PRs. Merge/deploy remain external.
+
 ## Waiting for commands
 
 Use `workspace_wait` with the workspace UUID and durable run ID returned by exec for a running command. One call waits up to 20 seconds by default, optionally 10–30 seconds, checking state internally about every two seconds. An invocation memo retains its deadline across tool recovery, and explicit IDs prevent retargeting if the conversation later gets a fresh guest. Missing/stale runs never create a guest or a process. Ordinary status and the UI's 15-second polling remain immediate.

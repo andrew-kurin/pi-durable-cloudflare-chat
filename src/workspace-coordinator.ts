@@ -1,8 +1,10 @@
+import {HARNESS_REPOSITORY,sha1} from './change-contract';
 import type { TaskWorkspace } from "./workspace-container";
 import type { WorkspaceRequest, WorkspaceToolRequest } from "./workspace-tools";
 import { RequestError } from "./http-input";
 interface Config {
   ENABLE_WORKSPACE?: string;
+  SOURCE_REVISION?: string;
   WORKSPACE_IMAGE?: string;
   WORKSPACE_REPOSITORY?: string;
   Workspaces?: DurableObjectNamespace<TaskWorkspace>;
@@ -97,7 +99,7 @@ export class WorkspaceCoordinator {
     if (prior) return prior;
     const job = Promise.resolve()
       .then(() =>
-        this.stub(id).open(id, session, this.config.WORKSPACE_REPOSITORY!),
+        this.stub(id).open(id, session, this.config.WORKSPACE_REPOSITORY!, this.config.WORKSPACE_REPOSITORY===HARNESS_REPOSITORY&&sha1(this.config.SOURCE_REVISION)?this.config.SOURCE_REVISION:undefined),
       )
       .finally(() => {
         if (this.starts.get(id) === job) this.starts.delete(id);

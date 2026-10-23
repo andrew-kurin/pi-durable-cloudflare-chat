@@ -121,6 +121,8 @@ For the approved existing-host rollout, use production directly as described in 
 
 ## Forward-only Pi maintenance window
 
+The optional draft-PR publisher is a separate service and remains disabled until [its explicit setup](docs/harness-proposals.md#setup-still-requiring-approval) is approved. `ENABLE_HARNESS_PROPOSALS` and `PUBLICATION_ENDPOINT` are nonsecret deployment inputs; its transport key is provisioned separately as a Worker secret. Publishing a proposal never dispatches this deployment workflow or updates the model runner.
+
 The SIWC effort compatibility repair can ship in the Worker before a runner update. Both Worker catalogs explicitly disable `supportsMidConvoEffort` before Pi serialization, keeping selected effort in `reasoning.effort` and excluding subscription-unsupported `configuration_update` items. Existing runners accept these requests. This repair does not require a runner restart or credential changes.
 
 The same source includes a separately deployable runner diagnostic improvement: only allowlisted provider HTTP status/code/parameter values enter its error envelope, and provider HTTP 400 rejections remain application HTTP 400 instead of being wrapped in 502. Deploy the Worker reader/projection first; a later separately authorized runner release enables richer provider details. Until then, saved runner codes and gateway HTTP status still display safely. A gateway that replaces a response body can still remove provider details; do not infer missing metadata or rewrite old failures from correlated logs. This change does not add automatic retries, reopen failed intent, or remove any reservation. No runner deployment is part of the Worker deployment workflow.

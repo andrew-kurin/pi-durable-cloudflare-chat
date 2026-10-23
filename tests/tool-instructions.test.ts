@@ -8,9 +8,10 @@ import { createRegistry, Harness, MemoryStorage } from '@earendil-works/pi-durab
 import { compactionLogs } from '../src/compaction';
 import { delegation } from '../src/delegate';
 import { readTools, type ToolStorage } from '../src/read-tools';
+import {changeTools} from '../src/change-tools';
 import { workspaceTools } from '../src/workspace-tools';
 
-function registryFor(workspaceEnabled: boolean) {
+function registryFor(workspaceEnabled: boolean,proposalsEnabled=false) {
   const registry = createRegistry();
   const values = new Map<string, unknown>();
   const storage: ToolStorage = {
@@ -27,6 +28,7 @@ function registryFor(workspaceEnabled: boolean) {
       request: async () => { throw Error('Unexpected workspace execution in prompt fixture'); },
     }));
   }
+  if(workspaceEnabled&&proposalsEnabled)registry.install(changeTools({propose:async()=>{throw Error('Unexpected publication proposal');},status:async()=>{throw Error('Unexpected publication status');}}));
   registry.install(readTools(storage, {}, async () => {
     throw Error('Unexpected HTTP request in prompt fixture');
   }));
@@ -101,4 +103,8 @@ test('delegate remains tool-less when its parent has the complete chat registry'
   } finally {
     await harness.close(context);
   }
+});
+
+test('opt-in publication composes only propose/status tools and preserves the owner approval boundary',async()=>{
+ const faux=fauxProvider();let observed=false;faux.setResponses([transcript=>{const names=getCurrentTools(transcript.messages).map(t=>t.name);assert.equal(names.length,15);assert.ok(names.includes('harness_propose_change'));assert.ok(names.includes('harness_change_status'));assert.equal(names.some(n=>/authorize|deploy|merge/.test(n)),false);const prompt=getCurrentSystemPrompt(transcript.messages);assert.match(prompt,/owner must review the patch/);assert.match(prompt,/tool arguments cannot authorize|chat text are not that authorization/);assert.match(prompt,/Never send private code/);observed=true;return fauxAssistantMessage('Offline publication composition verified.');}]);const models=createModels();models.setProvider(faux.provider);const harness=await Harness.open(new MemoryStorage(),{models,registry:registryFor(true,true)},context);try{const root=await harness.root(context,{agent:{model:{provider:'faux',modelId:'faux-1'}}});assert.equal((await(await root.submit({type:'input',content:'Inspect publication tools.',requestId:'publication-tools'},context)).wait(context)).status,'done');assert.equal(observed,true);}finally{await harness.close(context);}
 });
