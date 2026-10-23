@@ -1,3 +1,5 @@
+import {ChangeProposals,type PublicationEnv} from './change-proposals';
+import {changeTools} from './change-tools';
 import { createWorkerRunnerProvider, runnerConfigured, type RunnerConfig } from "./model-runner-worker";
 import { COMPACTION_POLICY,compactionLogs } from './compaction';
 import { CODEX_CHAT_MODEL } from "./chat-model";
@@ -36,7 +38,7 @@ import { createCredentialStore } from "./credentials";
 declare const PI_DEPLOYMENT_MODE: string;
 const deploymentMode =
   typeof PI_DEPLOYMENT_MODE === "undefined" ? "local" : PI_DEPLOYMENT_MODE;
-interface Env extends AccessConfig, RunnerConfig, MaintenanceEnv {
+interface Env extends AccessConfig, RunnerConfig, MaintenanceEnv, PublicationEnv {
   ASSETS: Fetcher;
   Assistant: DurableObjectNamespace<Assistant>;
   CREDENTIAL_ENCRYPTION_KEY: string;
@@ -61,6 +63,7 @@ export class Assistant extends DurableObject<Env> {
     this.env,
     (id) => this.chatCatalog.requireActive(id),
   );
+  private changes = new ChangeProposals(this.ctx.storage,this.env,(session,id,artifact)=>this.workspaces.artifact(session,id,artifact),(input,init)=>this.maintenance.withActive(()=>globalThis.fetch(input,init)));
   private workspaceEnabled() {
     return this.workspaces.enabled();
   }
@@ -108,6 +111,7 @@ export class Assistant extends DurableObject<Env> {
             request: (session, r, progress) => this.maintenance.withActive(()=>this.workspaces.execute(session,r,progress)),
           }),
         );
+      if(this.workspaceEnabled()&&this.changes.enabled())registry.install(changeTools(this.changes));
       registry.install(readTools(this.ctx.storage, this.env, (input,init) => this.maintenance.withActive(()=>globalThis.fetch(input,init))));
       const opened = this.harnessRecovery.observe(await Harness.open(
         storage,
@@ -217,9 +221,21 @@ export class Assistant extends DurableObject<Env> {
         path === "/api/events" ||
         path === "/api/submit" ||
         path === "/api/session-title" ||
-        path.startsWith("/api/workspaces")
+        path.startsWith("/api/workspaces") || path.startsWith("/api/changes/")
       )
         await this.chatCatalog.requireActive(sid);
+      const proposalRoute=/^\/api\/changes\/([a-f0-9]{64})(?:\/(authorize|review))?$/.exec(path);
+      if(proposalRoute){
+        const [,id,action]=proposalRoute;
+        if(request.method==='GET'&&action==='review')return Response.json(await this.changes.review(sid,id));
+        if(request.method==='GET'&&!action)return Response.json(await this.changes.status(sid,id));
+        if(request.method==='POST'&&action==='authorize'){
+          const body=jsonObject(await readBodyText(request,1000,{message:'Invalid proposal authorization'}));
+          if(body.action!=='authorize_signed_draft_pr'||typeof body.patchSha256!=='string'||typeof body.treeSha!=='string')throw new RequestError(400,'Review the exact patch before authorizing a signed draft PR');
+          return Response.json(await this.changes.authorize(sid,id,body.patchSha256,body.treeSha));
+        }
+        return Response.json({error:'Method not allowed'},{status:405});
+      }
       if (path.startsWith("/api/grok/")) {
         if (this.env.ENABLE_GROK_SUBSCRIPTION !== "true")
           return Response.json(
@@ -526,6 +542,7 @@ export default {
       );
     }
     const url = new URL(request.url);
+    if(url.pathname==='/changes'||url.pathname==='/changes.html'||url.pathname==='/changes.js'||url.pathname==='/changes.css'){if(env.ENABLE_HARNESS_PROPOSALS!=='true')return secured(new Response('Not found',{status:404}));if(url.pathname==='/changes')url.pathname='/changes.html';return secured(await env.ASSETS.fetch(new Request(url,request)));}
     if(url.pathname==='/maintenance'||url.pathname==='/maintenance.html'||url.pathname==='/maintenance.js')return secured(await env.ASSETS.fetch(new Request(url,request)));
     if (
       url.pathname === "/grok-setup" ||
